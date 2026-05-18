@@ -75,8 +75,11 @@
         .modal-animate { animation: slideIn 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
         .backdrop-animate { animation: fadeIn 0.2s ease-out; }
 
+        /* FIX: larger day cells on mobile */
         @media (max-width: 768px) {
-            .day-cell { min-height: 85px !important; padding: 8px 6px !important; }
+            .day-cell { min-height: 95px !important; padding: 8px 6px !important; }
+            .day-cell .day-num { font-size: 0.85rem !important; }
+            .day-cell .day-amount { font-size: 0.7rem !important; }
         }
         
         @keyframes bounce {
@@ -87,13 +90,29 @@
         .animate-bounce {
             animation: bounce 2s ease-in-out infinite;
         }
+
+        /* Install PWA button */
+        #pwa-install-btn {
+            display: none;
+        }
+        #pwa-install-btn.visible {
+            display: flex;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useCallback } = React;
+
+        // --- SHA-256 helper for password hashing ---
+        const hashPassword = async (password) => {
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        };
 
         // --- פונקציות עזר קיימות ---
         const formatCurrency = (amount) => new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
@@ -101,18 +120,39 @@
         const formatDate = (dateStr) => { const [year, month, day] = dateStr.split('-'); return `${day}/${month}/${year}`; };
         const getDateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
+        // FIX: clamp dayOfMonth to actual days in month to avoid day-31 disappearing
+        const clampDayToMonth = (dayOfMonth, year, month) => {
+            const maxDay = new Date(year, month + 1, 0).getDate();
+            return Math.min(dayOfMonth, maxDay);
+        };
+
         const generateRecurringInstances = (recurring, monthsAhead = 12) => {
             const instances = [];
             const startDate = new Date(recurring.startDate);
             const endDate = recurring.endDate ? new Date(recurring.endDate) : null;
-            let currentDate = new Date(startDate.getFullYear(), startDate.getMonth(), recurring.dayOfMonth);
-            if (currentDate < startDate) currentDate.setMonth(currentDate.getMonth() + 1);
             const limitDate = new Date(); limitDate.setMonth(limitDate.getMonth() + monthsAhead);
-            while (currentDate <= limitDate) {
+
+            let year = startDate.getFullYear();
+            let month = startDate.getMonth();
+
+            // Start from the correct month
+            while (true) {
+                const clampedDay = clampDayToMonth(recurring.dayOfMonth, year, month);
+                const currentDate = new Date(year, month, clampedDay);
+                if (currentDate > limitDate) break;
                 if (currentDate >= startDate && (!endDate || currentDate <= endDate)) {
-                    instances.push({ id: `recurring-${recurring.id}-${getDateKey(currentDate)}`, date: getDateKey(currentDate), bankId: recurring.bankId, amount: recurring.amount, description: recurring.description, type: recurring.type, isRecurring: true });
+                    instances.push({
+                        id: `recurring-${recurring.id}-${getDateKey(currentDate)}`,
+                        date: getDateKey(currentDate),
+                        bankId: recurring.bankId,
+                        amount: recurring.amount,
+                        description: recurring.description,
+                        type: recurring.type,
+                        isRecurring: true
+                    });
                 }
-                currentDate.setMonth(currentDate.getMonth() + 1);
+                month++;
+                if (month > 11) { month = 0; year++; }
             }
             return instances;
         };
@@ -192,8 +232,9 @@
                     <input type="text" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} placeholder="✍️ תיאור" className="w-full p-2 border rounded-lg text-sm" />
                     <div className="flex gap-2">
                         <input type="number" value={formData.amount} onChange={(e) => setFormData({...formData, amount: e.target.value})} placeholder="₪ סכום" className="flex-1 p-2 border rounded-lg text-sm font-mono" step="0.01" />
-                        <input type="number" value={formData.dayOfMonth} onChange={(e) => setFormData({...formData, dayOfMonth: e.target.value})} placeholder="יום" min="1" max="31" className="w-20 p-2 border rounded-lg text-sm text-center font-bold" />
+                        <input type="number" value={formData.dayOfMonth} onChange={(e) => setFormData({...formData, dayOfMonth: e.target.value})} placeholder="יום" min="1" max="28" className="w-20 p-2 border rounded-lg text-sm text-center font-bold" title="יום 1-28 (למניעת בעיות בחודשים קצרים)" />
                     </div>
+                    <p className="text-xs text-gray-400">⚠️ מומלץ עד יום 28 כדי להבטיח שהתנועה תופיע בכל החודשים</p>
                     <div className="grid grid-cols-2 gap-2">
                         <div><label className="text-xs text-gray-600 block mb-1">📅 מתאריך</label><input type="date" value={formData.startDate} onChange={(e) => setFormData({...formData, startDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
                         <div><label className="text-xs text-gray-600 block mb-1">🏁 עד תאריך</label><input type="date" value={formData.endDate} onChange={(e) => setFormData({...formData, endDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
@@ -225,14 +266,51 @@
             return (
                 <div onClick={onClick} className={`day-cell min-h-[120px] p-3 border border-gray-200 cursor-pointer flex flex-col ${balance >= 0 ? 'positive-balance' : 'negative-balance'} ${isToday ? '!bg-blue-50 border-2 !border-blue-400 shadow-inner' : ''}`}>
                     <div className="flex justify-between items-start mb-2">
-                        <span className={`text-sm font-semibold ${isToday ? 'text-blue-700' : 'text-gray-700'}`}>{day}</span>
+                        <span className={`day-num text-sm font-semibold ${isToday ? 'text-blue-700' : 'text-gray-700'}`}>
+                            {day}
+                            {isToday && <span className="mr-1 text-[9px] bg-blue-600 text-white px-1 py-0.5 rounded-full align-middle">היום</span>}
+                        </span>
                         <div className="flex gap-1">
                             {hasTransactions && <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
                             {hasRecurring && <div className="w-2 h-2 bg-purple-500 rounded-full"></div>}
                         </div>
                     </div>
                     <div className="flex-1 flex items-center justify-center font-bold text-sm">
-                        <span className={hasNegativeBank ? 'text-red-600' : (balance >= 0 ? 'text-green-700' : 'text-red-600')}>{formatCurrencyCompact(balance)}</span>
+                        <span className={`day-amount ${hasNegativeBank ? 'text-red-600' : (balance >= 0 ? 'text-green-700' : 'text-red-600')}`}>{formatCurrencyCompact(balance)}</span>
+                    </div>
+                </div>
+            );
+        };
+
+        // NEW: Monthly summary bar
+        const MonthlySummary = ({ allTransactions, currentDate, banks, selectedBankFilter }) => {
+            const year = currentDate.getFullYear(), month = currentDate.getMonth();
+            const monthStart = `${year}-${String(month + 1).padStart(2,'0')}-01`;
+            const monthEnd = `${year}-${String(month + 1).padStart(2,'0')}-${String(new Date(year, month+1, 0).getDate()).padStart(2,'0')}`;
+
+            const monthTxs = allTransactions.filter(t => {
+                if (t.date < monthStart || t.date > monthEnd) return false;
+                if (selectedBankFilter !== 'all' && t.bankId !== selectedBankFilter) return false;
+                return true;
+            });
+
+            const income = monthTxs.filter(t => t.amount > 0).reduce((s,t) => s + t.amount, 0);
+            const expenses = monthTxs.filter(t => t.amount < 0).reduce((s,t) => s + t.amount, 0);
+            const balance = income + expenses;
+
+            return (
+                <div className="bg-white border-b px-4 py-3 grid grid-cols-3 gap-2 text-center text-sm">
+                    <div>
+                        <div className="text-xs text-gray-400 mb-0.5">💰 הכנסות</div>
+                        <div className="font-bold text-green-600">{formatCurrencyCompact(income)}</div>
+                    </div>
+                    <div>
+                        <div className="text-xs text-gray-400 mb-0.5">💸 הוצאות</div>
+                        <div className="font-bold text-red-500">{formatCurrencyCompact(expenses)}</div>
+                    </div>
+                    <div>
+                        <div className="text-xs text-gray-400 mb-0.5">📊 מאזן</div>
+                        <div className={`font-bold ${balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrencyCompact(balance)}</div>
                     </div>
                 </div>
             );
@@ -249,12 +327,21 @@
             const [toBank, setToBank] = useState(banks[1]?.id || banks[0]?.id);
             const [transferAmount, setTransferAmount] = useState('');
             const [transferDescription, setTransferDescription] = useState('🔄 העברה');
+            const [searchQuery, setSearchQuery] = useState('');
 
             const dayTransactions = allTransactions.filter(t => t.date === date);
             const bankBalances = banks.map(bank => ({ ...bank, balance: bank.initialBalance + allTransactions.filter(t => t.bankId === bank.id && t.date <= date).reduce((sum, t) => sum + t.amount, 0) }));
 
+            // FIX: disable transfer button when fromBank === toBank
+            const transferInvalid = fromBank === toBank;
+
             const startEdit = (tx) => { setEditingId(tx.id); setDescription(tx.description); setAmount(Math.abs(tx.amount).toString()); setType(tx.amount >= 0 ? 'income' : 'expense'); setSelectedBank(tx.bankId); setActiveTab('add'); };
             const resetForm = () => { setEditingId(null); setDescription(''); setAmount(''); setType('expense'); };
+
+            // Filter transactions by search in the 'tx' tab
+            const filteredDayTransactions = searchQuery.trim()
+                ? dayTransactions.filter(t => t.description?.includes(searchQuery) || Math.abs(t.amount).toString().includes(searchQuery))
+                : dayTransactions;
 
             return (
                 <>
@@ -283,21 +370,32 @@
                                 </form>
                             )}
                             {activeTab === 'transfer' && (
-                                <form className="space-y-4" onSubmit={e => { e.preventDefault(); if (fromBank === toBank) { alert('לא ניתן להעביר לאותו חשבון'); return; } onAddTransfer(fromBank, toBank, Number(transferAmount), transferDescription); onClose(); }}>
+                                <form className="space-y-4" onSubmit={e => { e.preventDefault(); onAddTransfer(fromBank, toBank, Number(transferAmount), transferDescription); onClose(); }}>
                                     <div className="bg-purple-50 p-4 rounded-xl border-2 border-purple-200 space-y-3">
                                         <h4 className="font-bold text-center mb-4 text-purple-800">🔄 העברה בין חשבונות</h4>
                                         <div><label className="text-xs font-bold text-purple-600 block mb-1">📤 מחשבון</label><select value={fromBank} onChange={e => setFromBank(e.target.value)} className="w-full p-3 border-2 rounded-xl bg-white">{banks.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
                                         <div className="text-center text-2xl">⬇️</div>
                                         <div><label className="text-xs font-bold text-purple-600 block mb-1">📥 לחשבון</label><select value={toBank} onChange={e => setToBank(e.target.value)} className="w-full p-3 border-2 rounded-xl bg-white">{banks.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                                        {/* FIX: show warning instead of alert when same bank selected */}
+                                        {transferInvalid && <p className="text-red-500 text-sm font-bold text-center">⚠️ לא ניתן להעביר לאותו חשבון</p>}
                                         <div><label className="text-xs font-bold text-purple-600 block mb-1">₪ סכום העברה</label><input type="number" value={transferAmount} onChange={e => setTransferAmount(e.target.value)} placeholder="0.00" className="w-full p-3 border-2 rounded-xl font-mono" step="0.01" required /></div>
                                         <div><label className="text-xs font-bold text-purple-600 block mb-1">✍️ תיאור</label><input type="text" value={transferDescription} onChange={e => setTransferDescription(e.target.value)} placeholder="העברה" className="w-full p-3 border-2 rounded-xl" /></div>
                                     </div>
-                                    <button type="submit" className="w-full bg-purple-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-purple-700">🚀 בצע העברה</button>
+                                    {/* FIX: button disabled when same bank */}
+                                    <button type="submit" disabled={transferInvalid} className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${transferInvalid ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-700'}`}>🚀 בצע העברה</button>
                                 </form>
                             )}
                             {activeTab === 'tx' && (
                                 <div className="space-y-3">
-                                    {dayTransactions.length === 0 ? <div className="text-center py-10 text-gray-400 italic">אין תנועות ביום זה</div> : dayTransactions.map(tx => {
+                                    {/* NEW: Search field in transactions tab */}
+                                    <input
+                                        type="text"
+                                        value={searchQuery}
+                                        onChange={e => setSearchQuery(e.target.value)}
+                                        placeholder="🔍 חיפוש לפי תיאור או סכום..."
+                                        className="w-full p-2 border-2 rounded-xl text-sm outline-none focus:border-blue-400"
+                                    />
+                                    {filteredDayTransactions.length === 0 ? <div className="text-center py-10 text-gray-400 italic">{searchQuery ? 'לא נמצאו תנועות' : 'אין תנועות ביום זה'}</div> : filteredDayTransactions.map(tx => {
                                         const isTransfer = !!tx.transferId;
                                         const linkedBank = isTransfer ? (tx.transferTo ? banks.find(b => b.id === tx.transferTo) : banks.find(b => b.id === tx.transferFrom)) : null;
                                         return (
@@ -323,12 +421,15 @@
             );
         };
 
-        // --- הוספת רכיב ניהול סיסמה ---
+        // FIX: Password section uses SHA-256 hashing
         const PasswordSection = () => {
             const [isChanging, setIsChanging] = useState(false);
             const [newPass, setNewPass] = useState('');
+            const [confirmPass, setConfirmPass] = useState('');
+            const [mismatch, setMismatch] = useState(false);
             
-            const handleSave = () => {
+            const handleSave = async () => {
+                setMismatch(false);
                 if (!newPass) {
                     if (confirm('מחיקת הסיסמה תהפוך את האפליקציה לחופשית לכל מי שיפתח אותה. להמשיך?')) {
                         localStorage.removeItem('finance_app_password');
@@ -336,10 +437,13 @@
                         setIsChanging(false);
                     }
                 } else {
-                    localStorage.setItem('finance_app_password', newPass);
+                    if (newPass !== confirmPass) { setMismatch(true); return; }
+                    const hashed = await hashPassword(newPass);
+                    localStorage.setItem('finance_app_password', hashed);
                     alert('הסיסמה עודכנה בהצלחה');
                     setIsChanging(false);
                     setNewPass('');
+                    setConfirmPass('');
                 }
             };
 
@@ -351,7 +455,7 @@
                             <span>🔑</span> הגדר / שנה סיסמת כניסה
                         </button>
                     ) : (
-                        <div className="flex flex-col sm:flex-row gap-3">
+                        <div className="flex flex-col gap-3">
                             <input 
                                 type="password" 
                                 value={newPass} 
@@ -359,9 +463,17 @@
                                 placeholder="סיסמה חדשה (השאר ריק לביטול)" 
                                 className="flex-1 p-3 border-2 rounded-xl outline-none focus:border-orange-400"
                             />
+                            <input 
+                                type="password" 
+                                value={confirmPass} 
+                                onChange={e => setConfirmPass(e.target.value)} 
+                                placeholder="אמת סיסמה" 
+                                className={`flex-1 p-3 border-2 rounded-xl outline-none ${mismatch ? 'border-red-400 bg-red-50' : 'focus:border-orange-400'}`}
+                            />
+                            {mismatch && <p className="text-red-500 text-sm font-bold">הסיסמאות אינן תואמות</p>}
                             <div className="flex gap-2">
                                 <button onClick={handleSave} className="bg-orange-600 text-white px-6 py-3 rounded-xl font-bold">שמור</button>
-                                <button onClick={() => setIsChanging(false)} className="bg-gray-100 text-gray-600 px-6 py-3 rounded-xl font-bold">ביטול</button>
+                                <button onClick={() => { setIsChanging(false); setNewPass(''); setConfirmPass(''); setMismatch(false); }} className="bg-gray-100 text-gray-600 px-6 py-3 rounded-xl font-bold">ביטול</button>
                             </div>
                         </div>
                     )}
@@ -369,7 +481,7 @@
             );
         };
 
-        // --- רכיב האפליקציה המקורי (ללא שינויים בלוגיקה הפנימית) ---
+        // --- רכיב האפליקציה המקורי ---
         const FinanceApp = () => {
             const [banks, setBanks] = useState(() => JSON.parse(localStorage.getItem('finance_banks')) || [{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
             const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_transactions')) || []);
@@ -382,10 +494,34 @@
             const [usdUpdateTime, setUsdUpdateTime] = useState(null);
             const [touchStart, setTouchStart] = useState(null);
             const [touchEnd, setTouchEnd] = useState(null);
+            const [showPwaInstall, setShowPwaInstall] = useState(false);
+            const [deferredPrompt, setDeferredPrompt] = useState(null);
+
+            // PWA install prompt
+            useEffect(() => {
+                const handler = (e) => { e.preventDefault(); setDeferredPrompt(e); setShowPwaInstall(true); };
+                window.addEventListener('beforeinstallprompt', handler);
+                return () => window.removeEventListener('beforeinstallprompt', handler);
+            }, []);
+
+            const handlePwaInstall = async () => {
+                if (!deferredPrompt) return;
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                setDeferredPrompt(null);
+                setShowPwaInstall(false);
+            };
 
             const onTouchStart = (e) => { setTouchEnd(null); setTouchStart(e.targetTouches[0].clientX); };
             const onTouchMove = (e) => { setTouchEnd(e.targetTouches[0].clientX); };
             const onTouchEnd = () => { if (!touchStart || !touchEnd) return; const distance = touchStart - touchEnd; if (distance > 50) changeMonth(-1); if (distance < -50) changeMonth(1); };
+
+            // FIX: arrow directions — RTL layout, left arrow = previous month (earlier), right arrow = next month (later)
+            // In Hebrew RTL: ➡ (right) goes back in time (earlier months), ⬅ (left) goes forward in time
+            // But visually for the user: "⬅" button should go to the NEXT month (newer), "➡" to previous (older)
+            // Original code had changeMonth(-1) on ⬅ which means -1 = future. Let's fix semantics:
+            // changeMonth(+1) = go forward in calendar time (next month)
+            // changeMonth(-1) = go back in calendar time (previous month)
             const changeMonth = (delta) => { const newDate = new Date(currentDate); newDate.setMonth(newDate.getMonth() + delta); setCurrentDate(newDate); };
 
             useEffect(() => { localStorage.setItem('finance_banks', JSON.stringify(banks)); }, [banks]);
@@ -423,26 +559,87 @@
             const editRecurring = (id, data) => { setRecurringTransactions(recurringTransactions.map(r => r.id === id ? { ...r, ...data } : r)); };
             const deleteRecurring = (id) => { const r = recurringTransactions.find(r => r.id === id); if (confirm(`למחוק את "${r.description}"?`)) { setRecurringTransactions(recurringTransactions.filter(rt => rt.id !== id)); if(confirm("למחוק גם היסטוריה?")) setTransactions(transactions.filter(t => t.recurringId !== id)); } };
 
+            // Check if currently viewing current month (to show "today" hint)
+            const isCurrentMonth = currentDate.getFullYear() === new Date().getFullYear() && currentDate.getMonth() === new Date().getMonth();
+
             return (
                 <div className="max-w-7xl mx-auto p-4 sm:p-8">
-                    <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center flex items-center justify-center gap-2"><span className="text-4xl animate-bounce">💰</span> <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">מנהל הכספים שלי</span></h1>
+                    <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center flex items-center justify-center gap-2">
+                        <span className="text-4xl animate-bounce">💰</span>
+                        <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">מנהל הכספים שלי</span>
+                    </h1>
+
+                    {/* NEW: PWA Install button */}
+                    {showPwaInstall && (
+                        <div className="mb-4 flex justify-center">
+                            <button onClick={handlePwaInstall} className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold shadow-md hover:bg-blue-700 flex items-center gap-2 animate-pulse">
+                                📲 התקן כאפליקציה על המכשיר
+                            </button>
+                        </div>
+                    )}
+
                     <div className="bg-white rounded-3xl shadow-xl overflow-hidden border-2 mb-12">
-                        <div className="bg-blue-600 p-6 flex justify-between items-center text-white"><button onClick={() => changeMonth(1)} className="text-2xl bg-white/20 hover:bg-white/40 w-10 h-10 rounded-xl transition-colors">⬅</button><div className="text-center"><h2 className="text-xl sm:text-3xl font-black">{currentDate.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' })}</h2><button onClick={() => setCurrentDate(new Date())} className="text-[10px] bg-white/20 px-3 py-1 rounded-full mt-2 hover:bg-white/30">🏠 חזור להיום</button></div><button onClick={() => changeMonth(-1)} className="text-2xl bg-white/20 hover:bg-white/40 w-10 h-10 rounded-xl transition-colors">➡</button></div>
-                        <div className="bg-gray-50 px-4 py-4 border-b flex items-center justify-center gap-3"><span className="text-sm font-bold text-gray-500">👀 תצוגת חשבון:</span><select value={selectedBankFilter} onChange={(e) => setSelectedBankFilter(e.target.value)} className="bg-white border-2 border-gray-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500 shadow-sm"><option value="all">💎 כל החשבונות</option>{banks.map(bank => <option key={bank.id} value={bank.id}>🏦 {bank.name}</option>)}</select></div>
-                        <div className="grid grid-cols-7 bg-gray-100 border-b text-center font-black py-4 text-gray-400 text-xs">{['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'].map(d => <div key={d} className="hidden sm:block">{d}</div>)}{['א','ב','ג','ד','ה','ו','ש'].map(d => <div key={d} className="sm:hidden">{d}</div>)}</div>
-                        <div className="grid grid-cols-7" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>{calendarData.map(d => <DayCell key={d.key} {...d} onClick={() => !d.isEmpty && setSelectedDate(d.dateKey)} />)}</div>
+                        {/* FIX: corrected arrow directions — ➡ = next month (newer), ⬅ = previous month (older) */}
+                        <div className="bg-blue-600 p-6 flex justify-between items-center text-white">
+                            {/* RIGHT arrow = go to next month (newer / later) */}
+                            <button onClick={() => changeMonth(1)} className="text-2xl bg-white/20 hover:bg-white/40 w-10 h-10 rounded-xl transition-colors" title="חודש הבא">➡</button>
+                            <div className="text-center">
+                                <h2 className="text-xl sm:text-3xl font-black">{currentDate.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' })}</h2>
+                                {/* NEW: show "today" label only when not in current month */}
+                                {!isCurrentMonth && (
+                                    <button onClick={() => setCurrentDate(new Date())} className="text-[10px] bg-white/20 px-3 py-1 rounded-full mt-2 hover:bg-white/30">🏠 חזור להיום</button>
+                                )}
+                                {isCurrentMonth && (
+                                    <div className="text-[10px] bg-white/10 px-3 py-1 rounded-full mt-2 inline-block">📍 חודש נוכחי</div>
+                                )}
+                            </div>
+                            {/* LEFT arrow = go to previous month (older / earlier) */}
+                            <button onClick={() => changeMonth(-1)} className="text-2xl bg-white/20 hover:bg-white/40 w-10 h-10 rounded-xl transition-colors" title="חודש קודם">⬅</button>
+                        </div>
+
+                        <div className="bg-gray-50 px-4 py-4 border-b flex items-center justify-center gap-3">
+                            <span className="text-sm font-bold text-gray-500">👀 תצוגת חשבון:</span>
+                            <select value={selectedBankFilter} onChange={(e) => setSelectedBankFilter(e.target.value)} className="bg-white border-2 border-gray-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500 shadow-sm">
+                                <option value="all">💎 כל החשבונות</option>
+                                {banks.map(bank => <option key={bank.id} value={bank.id}>🏦 {bank.name}</option>)}
+                            </select>
+                        </div>
+
+                        {/* NEW: Monthly summary strip */}
+                        <MonthlySummary allTransactions={allTransactions} currentDate={currentDate} banks={banks} selectedBankFilter={selectedBankFilter} />
+
+                        <div className="grid grid-cols-7 bg-gray-100 border-b text-center font-black py-4 text-gray-400 text-xs">
+                            {['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'].map(d => <div key={d} className="hidden sm:block">{d}</div>)}
+                            {['א','ב','ג','ד','ה','ו','ש'].map(d => <div key={d} className="sm:hidden">{d}</div>)}
+                        </div>
+                        <div className="grid grid-cols-7" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+                            {calendarData.map(d => <DayCell key={d.key} {...d} onClick={() => !d.isEmpty && setSelectedDate(d.dateKey)} />)}
+                        </div>
                     </div>
+
                     <div className="pt-8 border-t-4 border-gray-100">
                         <h2 className="text-2xl font-black text-gray-800 mb-8 text-center flex items-center justify-center gap-2"><span>⚙️</span> הגדרות וניהול</h2>
-                        <div className="mb-10"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold flex items-center gap-2">🏦 ניהול חשבונות בנק</h3><button onClick={() => setBanks([...banks, { id: Date.now().toString(), name: 'חשבון חדש', color: '#6366f1', initialBalance: 0 }])} className="bg-blue-600 text-white px-5 py-2 rounded-xl font-bold shadow-md hover:bg-blue-700">➕ הוסף חשבון</button></div><div className="grid grid-cols-1 sm:grid-cols-3 gap-6">{banks.map(b => <BankCard key={b.id} bank={b} onUpdate={(id, f, v) => setBanks(banks.map(bk => bk.id === id ? {...bk, [f]: v} : bk))} onDelete={id => setBanks(banks.filter(bk => bk.id !== id))} canDelete={banks.length > 1} />)}</div></div>
-                        <div className="mb-10"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold flex items-center gap-2">🔄 תנועות חוזרות (קבועות)</h3><button onClick={() => setShowAddRecurring(!showAddRecurring)} className={`px-5 py-2 rounded-xl font-bold shadow-md transition-all ${showAddRecurring ? 'bg-gray-500 text-white' : 'bg-purple-600 text-white hover:bg-purple-700'}`}>{showAddRecurring ? '✕ ביטול' : '+ הוסף תנועה חוזרת'}</button></div>{showAddRecurring && <div className="mb-6"><RecurringForm banks={banks} onSave={addRecurring} onCancel={() => setShowAddRecurring(false)} /></div>}{recurringTransactions.length === 0 ? <div className="bg-purple-50 border-2 border-dashed border-purple-200 rounded-3xl p-10 text-center"><div className="text-5xl mb-4">🔄</div><p className="text-purple-800 font-bold mb-1 text-lg">אין תנועות חוזרות מוגדרות</p></div> : <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">{recurringTransactions.map(r => <RecurringCard key={r.id} recurring={r} banks={banks} onEdit={editRecurring} onDelete={deleteRecurring} />)}</div>}</div>
+                        <div className="mb-10">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-xl font-bold flex items-center gap-2">🏦 ניהול חשבונות בנק</h3>
+                                <button onClick={() => setBanks([...banks, { id: Date.now().toString(), name: 'חשבון חדש', color: '#6366f1', initialBalance: 0 }])} className="bg-blue-600 text-white px-5 py-2 rounded-xl font-bold shadow-md hover:bg-blue-700">➕ הוסף חשבון</button>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">{banks.map(b => <BankCard key={b.id} bank={b} onUpdate={(id, f, v) => setBanks(banks.map(bk => bk.id === id ? {...bk, [f]: v} : bk))} onDelete={id => setBanks(banks.filter(bk => bk.id !== id))} canDelete={banks.length > 1} />)}</div>
+                        </div>
+                        <div className="mb-10">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-xl font-bold flex items-center gap-2">🔄 תנועות חוזרות (קבועות)</h3>
+                                <button onClick={() => setShowAddRecurring(!showAddRecurring)} className={`px-5 py-2 rounded-xl font-bold shadow-md transition-all ${showAddRecurring ? 'bg-gray-500 text-white' : 'bg-purple-600 text-white hover:bg-purple-700'}`}>{showAddRecurring ? '✕ ביטול' : '+ הוסף תנועה חוזרת'}</button>
+                            </div>
+                            {showAddRecurring && <div className="mb-6"><RecurringForm banks={banks} onSave={addRecurring} onCancel={() => setShowAddRecurring(false)} /></div>}
+                            {recurringTransactions.length === 0 ? <div className="bg-purple-50 border-2 border-dashed border-purple-200 rounded-3xl p-10 text-center"><div className="text-5xl mb-4">🔄</div><p className="text-purple-800 font-bold mb-1 text-lg">אין תנועות חוזרות מוגדרות</p></div> : <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">{recurringTransactions.map(r => <RecurringCard key={r.id} recurring={r} banks={banks} onEdit={editRecurring} onDelete={deleteRecurring} />)}</div>}
+                        </div>
                         
                         <div className="flex flex-col sm:flex-row gap-3 justify-center py-6 border-t border-dashed border-gray-200">
                             <button onClick={exportData} className="bg-gradient-to-r from-gray-700 to-gray-800 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md text-sm"><span>💾</span> גיבוי נתונים</button>
                             <label className="bg-white text-gray-700 border-2 border-gray-200 px-6 py-3 rounded-xl font-bold cursor-pointer text-center flex items-center justify-center gap-2 shadow-sm text-sm"><span>📂</span> שחזור נתונים<input type="file" onChange={importData} className="hidden" /></label>
                         </div>
                         
-                        {/* הוספת סעיף הסיסמה החדש */}
                         <PasswordSection />
 
                         {usdRate && <div className="text-center pb-6 space-y-4"><div className="inline-flex items-center gap-2 bg-gradient-to-r from-green-50 to-emerald-50 px-5 py-2.5 rounded-xl border border-green-200 shadow-sm"><span>💵</span><span className="text-sm font-medium text-gray-600">שער:</span><span className="font-bold text-green-700">$1 = ₪{usdRate}</span></div><br/><CurrencyConverter usdRate={usdRate} /></div>}
@@ -452,30 +649,31 @@
             );
         };
 
-        // --- רכיב הגנה חדש העוטף את האפליקציה ---
+        // FIX: PasswordProtector uses SHA-256 hashing for comparison
         const PasswordProtector = () => {
             const [isAuthenticated, setIsAuthenticated] = useState(false);
             const [inputPass, setInputPass] = useState('');
             const [error, setError] = useState(false);
+            const [checking, setChecking] = useState(false);
             
             const savedPass = localStorage.getItem('finance_app_password');
 
-            // אם אין סיסמה מוגדרת, הכנס ישר
             useEffect(() => {
-                if (!savedPass) {
-                    setIsAuthenticated(true);
-                }
+                if (!savedPass) setIsAuthenticated(true);
             }, [savedPass]);
 
-            const handleLogin = (e) => {
+            const handleLogin = async (e) => {
                 e.preventDefault();
-                if (inputPass === savedPass) {
+                setChecking(true);
+                const hashed = await hashPassword(inputPass);
+                if (hashed === savedPass) {
                     setIsAuthenticated(true);
                     setError(false);
                 } else {
                     setError(true);
                     setInputPass('');
                 }
+                setChecking(false);
             };
 
             if (isAuthenticated) return <FinanceApp />;
@@ -495,7 +693,9 @@
                                 autoFocus
                             />
                             {error && <p className="text-red-500 text-sm font-bold">סיסמה שגויה, נסה שוב</p>}
-                            <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-blue-700 transition-colors shadow-lg">כניסה</button>
+                            <button type="submit" disabled={checking} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-blue-700 transition-colors shadow-lg disabled:opacity-70">
+                                {checking ? '⏳ בודק...' : 'כניסה'}
+                            </button>
                         </form>
                     </div>
                 </div>
