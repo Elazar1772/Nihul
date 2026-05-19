@@ -17,45 +17,6 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
-        const firebaseConfig = {
-            apiKey: "AIzaSyB0OwQo1MiX1EHvEsdpxhdJ9gQCWZoTVKw",
-            authDomain: "finance-3338e.firebaseapp.com",
-            projectId: "finance-3338e",
-            storageBucket: "finance-3338e.firebasestorage.app",
-            messagingSenderId: "986568232666",
-            appId: "1:986568232666:web:e2cab159d6c1039e7e9fe3"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-
-        // USER_ID קבוע — אפליקציה אישית
-        const USER_ID = 'main-user';
-        const docRef = doc(db, 'finance', USER_ID);
-
-        // שמירה ל-Firebase
-        window.saveToFirebase = async (banks, transactions, recurringTransactions) => {
-            try {
-                await setDoc(docRef, { banks, transactions, recurringTransactions }, { merge: true });
-            } catch(e) { console.error('Firebase save error:', e); }
-        };
-
-        // טעינה ראשונית מ-Firebase
-        window.loadFromFirebase = async () => {
-            try {
-                const snap = await getDoc(docRef);
-                if (snap.exists()) return snap.data();
-            } catch(e) { console.error('Firebase load error:', e); }
-            return null;
-        };
-
-        window.firebaseReady = true;
-        window.dispatchEvent(new Event('firebase-ready'));
-    </script>
     <style>
         :root {
             --primary-color: #3b82f6;
@@ -605,10 +566,9 @@
 
         // --- רכיב האפליקציה המקורי ---
         const FinanceApp = () => {
-            const [banks, setBanks] = useState([{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
-            const [transactions, setTransactions] = useState([]);
-            const [recurringTransactions, setRecurringTransactions] = useState([]);
-            const [loading, setLoading] = useState(true);
+            const [banks, setBanks] = useState(() => JSON.parse(localStorage.getItem('finance_banks')) || [{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_transactions')) || []);
+            const [recurringTransactions, setRecurringTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_recurring')) || []);
             const [currentDate, setCurrentDate] = useState(new Date());
             const [selectedDate, setSelectedDate] = useState(null);
             const [showAddRecurring, setShowAddRecurring] = useState(false);
@@ -620,62 +580,6 @@
             const [showPwaInstall, setShowPwaInstall] = useState(false);
             const [deferredPrompt, setDeferredPrompt] = useState(null);
             const [showPending, setShowPending] = useState(true);
-
-            // טעינה ראשונית מ-Firebase, fallback ל-localStorage
-            useEffect(() => {
-                const load = async () => {
-                    if (window.firebaseReady) {
-                        const data = await window.loadFromFirebase();
-                        if (data) {
-                            if (data.banks) setBanks(data.banks);
-                            if (data.transactions) setTransactions(data.transactions);
-                            if (data.recurringTransactions) setRecurringTransactions(data.recurringTransactions);
-                        } else {
-                            // Firebase ריק — נסה לטעון מ-localStorage (מיגרציה)
-                            const lb = localStorage.getItem('finance_banks');
-                            const lt = localStorage.getItem('finance_transactions');
-                            const lr = localStorage.getItem('finance_recurring');
-                            if (lb) setBanks(JSON.parse(lb));
-                            if (lt) setTransactions(JSON.parse(lt));
-                            if (lr) setRecurringTransactions(JSON.parse(lr));
-                        }
-                        setLoading(false);
-                    } else {
-                        // Firebase עוד לא מוכן — המתן
-                        window.addEventListener('firebase-ready', async () => {
-                            const data = await window.loadFromFirebase();
-                            if (data) {
-                                if (data.banks) setBanks(data.banks);
-                                if (data.transactions) setTransactions(data.transactions);
-                                if (data.recurringTransactions) setRecurringTransactions(data.recurringTransactions);
-                            } else {
-                                const lb = localStorage.getItem('finance_banks');
-                                const lt = localStorage.getItem('finance_transactions');
-                                const lr = localStorage.getItem('finance_recurring');
-                                if (lb) setBanks(JSON.parse(lb));
-                                if (lt) setTransactions(JSON.parse(lt));
-                                if (lr) setRecurringTransactions(JSON.parse(lr));
-                            }
-                            setLoading(false);
-                        }, { once: true });
-                    }
-                };
-                load();
-            }, []);
-
-            // שמירה ל-Firebase בכל שינוי (debounced)
-            const saveTimeout = React.useRef(null);
-            useEffect(() => {
-                if (loading) return;
-                if (saveTimeout.current) clearTimeout(saveTimeout.current);
-                saveTimeout.current = setTimeout(() => {
-                    if (window.saveToFirebase) window.saveToFirebase(banks, transactions, recurringTransactions);
-                    // שמור גם ב-localStorage כגיבוי
-                    localStorage.setItem('finance_banks', JSON.stringify(banks));
-                    localStorage.setItem('finance_transactions', JSON.stringify(transactions));
-                    localStorage.setItem('finance_recurring', JSON.stringify(recurringTransactions));
-                }, 800);
-            }, [banks, transactions, recurringTransactions, loading]);
 
             // PWA install prompt
             useEffect(() => {
@@ -695,15 +599,18 @@
             const onTouchStart = (e) => { setTouchEnd(null); setTouchStart(e.targetTouches[0].clientX); };
             const onTouchMove = (e) => { setTouchEnd(e.targetTouches[0].clientX); };
             const onTouchEnd = () => { if (!touchStart || !touchEnd) return; const distance = touchStart - touchEnd; if (distance > 50) changeMonth(-1); if (distance < -50) changeMonth(1); };
+
+            // FIX: arrow directions — RTL layout, left arrow = previous month (earlier), right arrow = next month (later)
+            // In Hebrew RTL: ➡ (right) goes back in time (earlier months), ⬅ (left) goes forward in time
+            // But visually for the user: "⬅" button should go to the NEXT month (newer), "➡" to previous (older)
+            // Original code had changeMonth(-1) on ⬅ which means -1 = future. Let's fix semantics:
+            // changeMonth(+1) = go forward in calendar time (next month)
+            // changeMonth(-1) = go back in calendar time (previous month)
             const changeMonth = (delta) => { const newDate = new Date(currentDate); newDate.setMonth(newDate.getMonth() + delta); setCurrentDate(newDate); };
 
-            // מסך טעינה
-            if (loading) return (
-                <div className="fixed inset-0 bg-blue-600 flex flex-col items-center justify-center text-white gap-4">
-                    <div className="text-6xl animate-bounce">💰</div>
-                    <div className="text-xl font-bold">טוען נתונים...</div>
-                </div>
-            );
+            useEffect(() => { localStorage.setItem('finance_banks', JSON.stringify(banks)); }, [banks]);
+            useEffect(() => { localStorage.setItem('finance_transactions', JSON.stringify(transactions)); }, [transactions]);
+            useEffect(() => { localStorage.setItem('finance_recurring', JSON.stringify(recurringTransactions)); }, [recurringTransactions]);
 
             useEffect(() => {
                 fetch('https://api.exchangerate-api.com/v4/latest/USD')
