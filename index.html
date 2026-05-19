@@ -98,6 +98,12 @@
         #pwa-install-btn.visible {
             display: flex;
         }
+
+        /* Pending (planned) transaction style */
+        .day-cell.has-pending .day-amount {
+            font-style: italic;
+            opacity: 0.75;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -261,10 +267,10 @@
             );
         };
 
-        const DayCell = ({ day, balance, hasNegativeBank, hasTransactions, hasRecurring, isToday, isEmpty, onClick }) => {
+        const DayCell = ({ day, balance, hasNegativeBank, hasTransactions, hasRecurring, hasPending, isToday, isEmpty, onClick }) => {
             if (isEmpty) return <div className="min-h-[100px] bg-gray-50 border border-gray-100"></div>;
             return (
-                <div onClick={onClick} className={`day-cell min-h-[120px] p-3 border border-gray-200 cursor-pointer flex flex-col ${balance >= 0 ? 'positive-balance' : 'negative-balance'} ${isToday ? '!bg-blue-50 border-2 !border-blue-400 shadow-inner' : ''}`}>
+                <div onClick={onClick} className={`day-cell min-h-[120px] p-3 border border-gray-200 cursor-pointer flex flex-col ${balance >= 0 ? 'positive-balance' : 'negative-balance'} ${isToday ? '!bg-blue-50 border-2 !border-blue-400 shadow-inner' : ''} ${hasPending ? 'has-pending' : ''}`}>
                     <div className="flex justify-between items-start mb-2">
                         <span className={`day-num text-sm font-semibold ${isToday ? 'text-blue-700' : 'text-gray-700'}`}>
                             {day}
@@ -273,17 +279,57 @@
                         <div className="flex gap-1">
                             {hasTransactions && <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
                             {hasRecurring && <div className="w-2 h-2 bg-purple-500 rounded-full"></div>}
+                            {hasPending && <div className="w-2 h-2 bg-orange-400 rounded-full" title="יש תנועות מתוכננות"></div>}
                         </div>
                     </div>
                     <div className="flex-1 flex items-center justify-center font-bold text-sm">
                         <span className={`day-amount ${hasNegativeBank ? 'text-red-600' : (balance >= 0 ? 'text-green-700' : 'text-red-600')}`}>{formatCurrencyCompact(balance)}</span>
                     </div>
+                    {hasPending && <div className="text-[9px] text-orange-400 text-center font-medium">מתוכנן</div>}
                 </div>
             );
         };
 
-        // NEW: Monthly summary bar
-        const MonthlySummary = ({ allTransactions, currentDate, banks, selectedBankFilter }) => {
+        // Modal for monthly drill-down (income or expense list)
+        const MonthlyDrillModal = ({ type, transactions, banks, currentDate, onClose }) => {
+            const label = type === 'income' ? '💰 הכנסות החודש' : '💸 הוצאות החודש';
+            const sorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date));
+            const total = sorted.reduce((s, t) => s + t.amount, 0);
+            return (
+                <>
+                    <div className="backdrop-animate fixed inset-0 bg-black/40 backdrop-blur-sm z-40" onClick={onClose}></div>
+                    <div className="modal-animate fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-3xl shadow-2xl w-[95%] max-w-lg z-50 overflow-hidden flex flex-col max-h-[85vh]">
+                        <div className={`p-5 text-white flex justify-between items-center ${type === 'income' ? 'bg-green-600' : 'bg-red-500'}`}>
+                            <h2 className="text-xl font-bold">{label}</h2>
+                            <button onClick={onClose} className="bg-white/20 hover:bg-white/40 w-8 h-8 rounded-full flex items-center justify-center">✕</button>
+                        </div>
+                        <div className="p-4 overflow-y-auto space-y-2">
+                            {sorted.length === 0
+                                ? <div className="text-center py-10 text-gray-400 italic">אין תנועות</div>
+                                : sorted.map(tx => (
+                                    <div key={tx.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border">
+                                        <div>
+                                            <div className="font-semibold text-gray-800">{tx.description}</div>
+                                            <div className="text-xs text-gray-400">{formatDate(tx.date)} · {banks.find(b => b.id === tx.bankId)?.name}</div>
+                                        </div>
+                                        <span className={`font-bold font-mono ${type === 'income' ? 'text-green-600' : 'text-red-500'}`}>{formatCurrency(Math.abs(tx.amount))}</span>
+                                    </div>
+                                ))
+                            }
+                        </div>
+                        <div className={`px-5 py-3 border-t flex justify-between font-black text-lg ${type === 'income' ? 'text-green-700' : 'text-red-600'}`}>
+                            <span>סה"כ</span>
+                            <span className="font-mono">{formatCurrency(Math.abs(total))}</span>
+                        </div>
+                    </div>
+                </>
+            );
+        };
+
+        // NEW: Monthly summary bar — cells are clickable for income/expense drill-down
+        const MonthlySummary = ({ allTransactions, currentDate, banks, selectedBankFilter, showPending }) => {
+            const [drillType, setDrillType] = useState(null); // 'income' | 'expense' | null
+
             const year = currentDate.getFullYear(), month = currentDate.getMonth();
             const monthStart = `${year}-${String(month + 1).padStart(2,'0')}-01`;
             const monthEnd = `${year}-${String(month + 1).padStart(2,'0')}-${String(new Date(year, month+1, 0).getDate()).padStart(2,'0')}`;
@@ -291,28 +337,45 @@
             const monthTxs = allTransactions.filter(t => {
                 if (t.date < monthStart || t.date > monthEnd) return false;
                 if (selectedBankFilter !== 'all' && t.bankId !== selectedBankFilter) return false;
+                if (!showPending && t.isPending) return false;
                 return true;
             });
 
+            // drill-down always shows only actual (non-pending) transactions
+            const actualTxs = monthTxs.filter(t => !t.isPending);
+
+            const incomeTxs = actualTxs.filter(t => t.amount > 0);
+            const expenseTxs = actualTxs.filter(t => t.amount < 0);
             const income = monthTxs.filter(t => t.amount > 0).reduce((s,t) => s + t.amount, 0);
             const expenses = monthTxs.filter(t => t.amount < 0).reduce((s,t) => s + t.amount, 0);
             const balance = income + expenses;
 
             return (
-                <div className="bg-white border-b px-4 py-3 grid grid-cols-3 gap-2 text-center text-sm">
-                    <div>
-                        <div className="text-xs text-gray-400 mb-0.5">💰 הכנסות</div>
-                        <div className="font-bold text-green-600">{formatCurrencyCompact(income)}</div>
+                <>
+                    <div className="bg-white border-b px-4 py-3 grid grid-cols-3 gap-2 text-center text-sm">
+                        <button onClick={() => setDrillType('income')} className="rounded-xl py-1 hover:bg-green-50 transition-colors cursor-pointer">
+                            <div className="text-xs text-gray-400 mb-0.5">💰 הכנסות</div>
+                            <div className="font-bold text-green-600 underline decoration-dotted">{formatCurrencyCompact(income)}</div>
+                        </button>
+                        <button onClick={() => setDrillType('expense')} className="rounded-xl py-1 hover:bg-red-50 transition-colors cursor-pointer">
+                            <div className="text-xs text-gray-400 mb-0.5">💸 הוצאות</div>
+                            <div className="font-bold text-red-500 underline decoration-dotted">{formatCurrencyCompact(expenses)}</div>
+                        </button>
+                        <div className="py-1">
+                            <div className="text-xs text-gray-400 mb-0.5">📊 מאזן</div>
+                            <div className={`font-bold ${balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrencyCompact(balance)}</div>
+                        </div>
                     </div>
-                    <div>
-                        <div className="text-xs text-gray-400 mb-0.5">💸 הוצאות</div>
-                        <div className="font-bold text-red-500">{formatCurrencyCompact(expenses)}</div>
-                    </div>
-                    <div>
-                        <div className="text-xs text-gray-400 mb-0.5">📊 מאזן</div>
-                        <div className={`font-bold ${balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrencyCompact(balance)}</div>
-                    </div>
-                </div>
+                    {drillType && (
+                        <MonthlyDrillModal
+                            type={drillType}
+                            transactions={drillType === 'income' ? incomeTxs : expenseTxs}
+                            banks={banks}
+                            currentDate={currentDate}
+                            onClose={() => setDrillType(null)}
+                        />
+                    )}
+                </>
             );
         };
 
@@ -321,6 +384,7 @@
             const [description, setDescription] = useState('');
             const [amount, setAmount] = useState('');
             const [type, setType] = useState('expense');
+            const [isPending, setIsPending] = useState(false);
             const [activeTab, setActiveTab] = useState('add');
             const [editingId, setEditingId] = useState(null);
             const [fromBank, setFromBank] = useState(banks[0]?.id || '');
@@ -335,8 +399,8 @@
             // FIX: disable transfer button when fromBank === toBank
             const transferInvalid = fromBank === toBank;
 
-            const startEdit = (tx) => { setEditingId(tx.id); setDescription(tx.description); setAmount(Math.abs(tx.amount).toString()); setType(tx.amount >= 0 ? 'income' : 'expense'); setSelectedBank(tx.bankId); setActiveTab('add'); };
-            const resetForm = () => { setEditingId(null); setDescription(''); setAmount(''); setType('expense'); };
+            const startEdit = (tx) => { setEditingId(tx.id); setDescription(tx.description); setAmount(Math.abs(tx.amount).toString()); setType(tx.amount >= 0 ? 'income' : 'expense'); setSelectedBank(tx.bankId); setIsPending(!!tx.isPending); setActiveTab('add'); };
+            const resetForm = () => { setEditingId(null); setDescription(''); setAmount(''); setType('expense'); setIsPending(false); };
 
             // Filter transactions by search in the 'tx' tab
             const filteredDayTransactions = searchQuery.trim()
@@ -355,7 +419,7 @@
                         </div>
                         <div className="p-5 overflow-y-auto">
                             {activeTab === 'add' && (
-                                <form className="space-y-4" onSubmit={e => { e.preventDefault(); const txData = { id: editingId || Date.now().toString(), date, bankId: selectedBank, amount: type === 'expense' ? -Math.abs(Number(amount)) : Math.abs(Number(amount)), description, isRecurring: false }; if(editingId) onUpdateTransaction(txData); else onAddTransaction(txData); onClose(); }}>
+                                <form className="space-y-4" onSubmit={e => { e.preventDefault(); const txData = { id: editingId || Date.now().toString(), date, bankId: selectedBank, amount: type === 'expense' ? -Math.abs(Number(amount)) : Math.abs(Number(amount)), description, isRecurring: false, isPending }; if(editingId) onUpdateTransaction(txData); else onAddTransaction(txData); onClose(); }}>
                                     <div className="flex gap-2">
                                         <button type="button" onClick={() => setType('expense')} className={`flex-1 py-3 rounded-xl font-bold ${type === 'expense' ? 'bg-red-500 text-white shadow-lg' : 'bg-gray-100 text-gray-500'}`}>💸 הוצאה</button>
                                         <button type="button" onClick={() => setType('income')} className={`flex-1 py-3 rounded-xl font-bold ${type === 'income' ? 'bg-green-500 text-white shadow-lg' : 'bg-gray-100 text-gray-500'}`}>💰 הכנסה</button>
@@ -363,6 +427,10 @@
                                     <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="✍️ תיאור" className="w-full p-3 border-2 rounded-xl outline-none" required />
                                     <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="₪ סכום" className="w-full p-3 border-2 rounded-xl font-mono outline-none" required />
                                     <select value={selectedBank} onChange={e => setSelectedBank(e.target.value)} className="w-full p-3 border-2 rounded-xl bg-white">{banks.map(b => <option key={b.id} value={b.id}>🏦 {b.name}</option>)}</select>
+                                    {/* NEW: pending toggle */}
+                                    <button type="button" onClick={() => setIsPending(!isPending)} className={`w-full py-2 rounded-xl font-medium text-sm border-2 transition-all ${isPending ? 'bg-orange-50 border-orange-400 text-orange-700' : 'bg-gray-50 border-gray-200 text-gray-400'}`}>
+                                        🕐 {isPending ? 'מתוכנן (טרם בוצע)' : 'סמן כמתוכנן'}
+                                    </button>
                                     <div className="flex gap-2 pt-2">
                                         <button type="submit" className="flex-1 bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-md hover:bg-blue-700">✅ {editingId ? 'עדכן תנועה' : 'שמור תנועה'}</button>
                                         {editingId && <button type="button" onClick={resetForm} className="bg-gray-200 text-gray-700 px-6 rounded-xl">❌ בטל</button>}
@@ -399,9 +467,24 @@
                                         const isTransfer = !!tx.transferId;
                                         const linkedBank = isTransfer ? (tx.transferTo ? banks.find(b => b.id === tx.transferTo) : banks.find(b => b.id === tx.transferFrom)) : null;
                                         return (
-                                            <div key={tx.id} className={`flex justify-between items-center p-3 rounded-xl border-2 ${isTransfer ? 'bg-purple-50 border-purple-100' : 'bg-gray-50 border-gray-100'}`}>
-                                                <div className="flex-1"><div className="flex items-center gap-2"><span className="text-lg">{isTransfer ? '🔄' : (tx.amount >= 0 ? '💰' : '💸')}</span><span className="font-semibold text-gray-800">{tx.description}</span></div>{isTransfer && linkedBank && <div className="text-xs text-purple-600 font-medium mr-7">{tx.transferTo ? `⬅️ נשלח אל ${linkedBank.name}` : `➡️ התקבל מ-${linkedBank.name}`}</div>}<div className="text-[10px] text-gray-400 mr-7">{banks.find(b => b.id === tx.bankId)?.name}</div></div>
-                                                <div className="flex gap-1 items-center"><span className={`font-bold ml-2 ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(tx.amount)}</span>{!tx.isRecurring && <div className="flex bg-white rounded-lg shadow-sm border overflow-hidden">{!isTransfer && <button onClick={() => startEdit(tx)} className="p-2 hover:bg-blue-50 text-blue-500">✏️</button>}<button onClick={() => onDeleteTransaction(tx.id)} className="p-2 hover:bg-red-50 text-red-400 border-r">🗑️</button></div>}</div>
+                                            <div key={tx.id} className={`flex justify-between items-center p-3 rounded-xl border-2 ${tx.isPending ? 'bg-orange-50 border-orange-200' : isTransfer ? 'bg-purple-50 border-purple-100' : 'bg-gray-50 border-gray-100'}`}>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-lg">{tx.isPending ? '🕐' : isTransfer ? '🔄' : (tx.amount >= 0 ? '💰' : '💸')}</span>
+                                                        <span className={`font-semibold ${tx.isPending ? 'text-orange-700 italic' : 'text-gray-800'}`}>{tx.description}</span>
+                                                        {tx.isPending && <span className="text-[9px] bg-orange-200 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">מתוכנן</span>}
+                                                    </div>
+                                                    {isTransfer && linkedBank && <div className="text-xs text-purple-600 font-medium mr-7">{tx.transferTo ? `⬅️ נשלח אל ${linkedBank.name}` : `➡️ התקבל מ-${linkedBank.name}`}</div>}
+                                                    <div className="text-[10px] text-gray-400 mr-7">{banks.find(b => b.id === tx.bankId)?.name}</div>
+                                                </div>
+                                                <div className="flex gap-1 items-center">
+                                                    <span className={`font-bold ml-2 ${tx.isPending ? 'text-orange-500' : tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(tx.amount)}</span>
+                                                    {!tx.isRecurring && <div className="flex bg-white rounded-lg shadow-sm border overflow-hidden">
+                                                        {tx.isPending && <button onClick={() => onUpdateTransaction({...tx, isPending: false})} className="p-2 hover:bg-green-50 text-green-600 text-xs font-bold border-r" title="סמן כבוצע">✓</button>}
+                                                        {!isTransfer && <button onClick={() => startEdit(tx)} className="p-2 hover:bg-blue-50 text-blue-500">✏️</button>}
+                                                        <button onClick={() => onDeleteTransaction(tx.id)} className="p-2 hover:bg-red-50 text-red-400 border-r">🗑️</button>
+                                                    </div>}
+                                                </div>
                                             </div>
                                         );
                                     })}
@@ -496,6 +579,7 @@
             const [touchEnd, setTouchEnd] = useState(null);
             const [showPwaInstall, setShowPwaInstall] = useState(false);
             const [deferredPrompt, setDeferredPrompt] = useState(null);
+            const [showPending, setShowPending] = useState(true);
 
             // PWA install prompt
             useEffect(() => {
@@ -537,6 +621,11 @@
 
             const allTransactions = useMemo(() => [...transactions, ...recurringTransactions.flatMap(r => generateRecurringInstances(r))], [transactions, recurringTransactions]);
 
+            // allTransactions filtered by pending toggle — used for calendar display only
+            const displayTransactions = useMemo(() =>
+                showPending ? allTransactions : allTransactions.filter(t => !t.isPending),
+            [allTransactions, showPending]);
+
             const calendarData = useMemo(() => {
                 const year = currentDate.getFullYear(), month = currentDate.getMonth();
                 const firstDay = new Date(year, month, 1).getDay(), daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -544,14 +633,15 @@
                 for (let i = 0; i < firstDay; i++) days.push({ isEmpty: true, key: `empty-${i}` });
                 for (let day = 1; day <= daysInMonth; day++) {
                     const dateKey = getDateKey(new Date(year, month, day));
-                    const bankBalances = banks.map(bank => ({ bankId: bank.id, balance: bank.initialBalance + allTransactions.filter(t => t.bankId === bank.id && t.date <= dateKey).reduce((s, t) => s + t.amount, 0) }));
+                    const bankBalances = banks.map(bank => ({ bankId: bank.id, balance: bank.initialBalance + displayTransactions.filter(t => t.bankId === bank.id && t.date <= dateKey).reduce((s, t) => s + t.amount, 0) }));
                     const hasNegativeBank = bankBalances.some(b => b.balance < 0);
                     const totalBalance = bankBalances.reduce((sum, b) => sum + b.balance, 0);
                     const displayBalance = selectedBankFilter === 'all' ? totalBalance : bankBalances.find(b => b.bankId === selectedBankFilter)?.balance || 0;
-                    days.push({ day, dateKey, balance: displayBalance, hasNegativeBank: hasNegativeBank && selectedBankFilter === 'all', hasTransactions: transactions.some(t => t.date === dateKey), hasRecurring: allTransactions.some(t => t.date === dateKey && t.isRecurring), isToday: dateKey === getDateKey(new Date()), key: dateKey });
+                    const hasPending = transactions.some(t => t.date === dateKey && t.isPending);
+                    days.push({ day, dateKey, balance: displayBalance, hasNegativeBank: hasNegativeBank && selectedBankFilter === 'all', hasTransactions: transactions.some(t => t.date === dateKey && !t.isPending), hasRecurring: allTransactions.some(t => t.date === dateKey && t.isRecurring), hasPending, isToday: dateKey === getDateKey(new Date()), key: dateKey });
                 }
                 return days;
-            }, [currentDate, banks, allTransactions, transactions, selectedBankFilter]);
+            }, [currentDate, banks, displayTransactions, allTransactions, transactions, selectedBankFilter]);
 
             const exportData = () => { const blob = new Blob([JSON.stringify({ banks, transactions, recurringTransactions })], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `finance_backup_${getDateKey(new Date())}.json`; a.click(); };
             const importData = (e) => { const reader = new FileReader(); reader.onload = (evt) => { const data = JSON.parse(evt.target.result); if (confirm('זה יחליף את כל הנתונים הקיימים. להמשיך?')) { setBanks(data.banks); setTransactions(data.transactions); setRecurringTransactions(data.recurringTransactions); } }; reader.readAsText(e.target.files[0]); };
@@ -597,16 +687,19 @@
                             <button onClick={() => changeMonth(-1)} className="text-2xl bg-white/20 hover:bg-white/40 w-10 h-10 rounded-xl transition-colors" title="חודש קודם">⬅</button>
                         </div>
 
-                        <div className="bg-gray-50 px-4 py-4 border-b flex items-center justify-center gap-3">
+                        <div className="bg-gray-50 px-4 py-4 border-b flex flex-wrap items-center justify-center gap-3">
                             <span className="text-sm font-bold text-gray-500">👀 תצוגת חשבון:</span>
                             <select value={selectedBankFilter} onChange={(e) => setSelectedBankFilter(e.target.value)} className="bg-white border-2 border-gray-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500 shadow-sm">
                                 <option value="all">💎 כל החשבונות</option>
                                 {banks.map(bank => <option key={bank.id} value={bank.id}>🏦 {bank.name}</option>)}
                             </select>
+                            <button onClick={() => setShowPending(!showPending)} className={`px-4 py-2 rounded-xl text-sm font-bold border-2 transition-all ${showPending ? 'bg-orange-50 border-orange-300 text-orange-700' : 'bg-white border-gray-200 text-gray-400'}`} title="הצג/הסתר תנועות מתוכננות">
+                                🕐 {showPending ? 'כולל מתוכנן' : 'בפועל בלבד'}
+                            </button>
                         </div>
 
                         {/* NEW: Monthly summary strip */}
-                        <MonthlySummary allTransactions={allTransactions} currentDate={currentDate} banks={banks} selectedBankFilter={selectedBankFilter} />
+                        <MonthlySummary allTransactions={allTransactions} currentDate={currentDate} banks={banks} selectedBankFilter={selectedBankFilter} showPending={showPending} />
 
                         <div className="grid grid-cols-7 bg-gray-100 border-b text-center font-black py-4 text-gray-400 text-xs">
                             {['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'].map(d => <div key={d} className="hidden sm:block">{d}</div>)}
