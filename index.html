@@ -17,6 +17,27 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script>
+        try {
+            firebase.initializeApp({
+                apiKey: "AIzaSyB0OwQo1MiX1EHvEsdpxhdJ9gQCWZoTVKw",
+                authDomain: "finance-3338e.firebaseapp.com",
+                projectId: "finance-3338e",
+                storageBucket: "finance-3338e.firebasestorage.app",
+                messagingSenderId: "986568232666",
+                appId: "1:986568232666:web:e2cab159d6c1039e7e9fe3"
+            });
+            const _db = firebase.firestore();
+            const _docRef = _db.collection('finance').doc('main-user');
+            window._fbDocRef = _docRef;
+            window._fbReady = true;
+        } catch(e) {
+            console.error('Firebase init error:', e);
+            window._fbReady = false;
+        }
+    </script>
     <style>
         :root {
             --primary-color: #3b82f6;
@@ -581,9 +602,34 @@
             const [deferredPrompt, setDeferredPrompt] = useState(null);
             const [showPending, setShowPending] = useState(true);
 
-            useEffect(() => { localStorage.setItem('finance_banks', JSON.stringify(banks)); }, [banks]);
-            useEffect(() => { localStorage.setItem('finance_transactions', JSON.stringify(transactions)); }, [transactions]);
-            useEffect(() => { localStorage.setItem('finance_recurring', JSON.stringify(recurringTransactions)); }, [recurringTransactions]);
+            const _saveRef = React.useRef(null);
+            useEffect(() => {
+                if (_saveRef.current) clearTimeout(_saveRef.current);
+                _saveRef.current = setTimeout(() => {
+                    // שמור תמיד ב-localStorage כגיבוי
+                    localStorage.setItem('finance_banks', JSON.stringify(banks));
+                    localStorage.setItem('finance_transactions', JSON.stringify(transactions));
+                    localStorage.setItem('finance_recurring', JSON.stringify(recurringTransactions));
+                    // שמור ב-Firebase אם זמין
+                    if (window._fbReady && window._fbDocRef) {
+                        window._fbDocRef.set({ banks, transactions, recurringTransactions }, { merge: true })
+                            .catch(e => console.error('Firebase save error:', e));
+                    }
+                }, 1000);
+            }, [banks, transactions, recurringTransactions]);
+
+            // טעינה מ-Firebase בעת עליית האפליקציה
+            useEffect(() => {
+                if (!window._fbReady || !window._fbDocRef) return;
+                window._fbDocRef.get().then(snap => {
+                    if (snap.exists) {
+                        const data = snap.data();
+                        if (data.banks?.length) setBanks(data.banks);
+                        if (data.transactions?.length) setTransactions(data.transactions);
+                        if (data.recurringTransactions?.length) setRecurringTransactions(data.recurringTransactions);
+                    }
+                }).catch(e => console.error('Firebase load error:', e));
+            }, []);
 
             useEffect(() => {
                 fetch('https://api.exchangerate-api.com/v4/latest/USD')
