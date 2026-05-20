@@ -617,44 +617,51 @@
 
             // טעינה ראשונית מ-Firebase, fallback ל-localStorage
             useEffect(() => {
-                const load = async () => {
-                    if (window.firebaseReady) {
+                const loadFromLocal = () => {
+                    const lb = localStorage.getItem('finance_banks');
+                    const lt = localStorage.getItem('finance_transactions');
+                    const lr = localStorage.getItem('finance_recurring');
+                    if (lb) setBanks(JSON.parse(lb));
+                    if (lt) setTransactions(JSON.parse(lt));
+                    if (lr) setRecurringTransactions(JSON.parse(lr));
+                    setLoading(false);
+                };
+
+                const loadFromFirebaseAndSet = async () => {
+                    try {
                         const data = await window.loadFromFirebase();
-                        if (data) {
+                        if (data && (data.banks || data.transactions)) {
                             if (data.banks) setBanks(data.banks);
                             if (data.transactions) setTransactions(data.transactions);
                             if (data.recurringTransactions) setRecurringTransactions(data.recurringTransactions);
-                        } else {
-                            // Firebase ריק — נסה לטעון מ-localStorage (מיגרציה)
-                            const lb = localStorage.getItem('finance_banks');
-                            const lt = localStorage.getItem('finance_transactions');
-                            const lr = localStorage.getItem('finance_recurring');
-                            if (lb) setBanks(JSON.parse(lb));
-                            if (lt) setTransactions(JSON.parse(lt));
-                            if (lr) setRecurringTransactions(JSON.parse(lr));
-                        }
-                        setLoading(false);
-                    } else {
-                        // Firebase עוד לא מוכן — המתן
-                        window.addEventListener('firebase-ready', async () => {
-                            const data = await window.loadFromFirebase();
-                            if (data) {
-                                if (data.banks) setBanks(data.banks);
-                                if (data.transactions) setTransactions(data.transactions);
-                                if (data.recurringTransactions) setRecurringTransactions(data.recurringTransactions);
-                            } else {
-                                const lb = localStorage.getItem('finance_banks');
-                                const lt = localStorage.getItem('finance_transactions');
-                                const lr = localStorage.getItem('finance_recurring');
-                                if (lb) setBanks(JSON.parse(lb));
-                                if (lt) setTransactions(JSON.parse(lt));
-                                if (lr) setRecurringTransactions(JSON.parse(lr));
-                            }
                             setLoading(false);
+                        } else {
+                            loadFromLocal();
+                        }
+                    } catch(e) {
+                        loadFromLocal();
+                    }
+                };
+
+                // timeout של 5 שניות — אם Firebase לא ענה, טען מקומי
+                const timeout = setTimeout(() => {
+                    loadFromLocal();
+                }, 5000);
+
+                const load = async () => {
+                    if (window.firebaseReady) {
+                        clearTimeout(timeout);
+                        await loadFromFirebaseAndSet();
+                    } else {
+                        window.addEventListener('firebase-ready', async () => {
+                            clearTimeout(timeout);
+                            await loadFromFirebaseAndSet();
                         }, { once: true });
                     }
                 };
                 load();
+
+                return () => clearTimeout(timeout);
             }, []);
 
             // שמירה ל-Firebase בכל שינוי (debounced)
