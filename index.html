@@ -17,39 +17,6 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-    <script>
-        const firebaseConfig = {
-            apiKey: "AIzaSyB0OwQo1MiX1EHvEsdpxhdJ9gQCWZoTVKw",
-            authDomain: "finance-3338e.firebaseapp.com",
-            projectId: "finance-3338e",
-            storageBucket: "finance-3338e.firebasestorage.app",
-            messagingSenderId: "986568232666",
-            appId: "1:986568232666:web:e2cab159d6c1039e7e9fe3"
-        };
-
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-        const docRef = db.collection('finance').doc('main-user');
-
-        window.saveToFirebase = async (banks, transactions, recurringTransactions) => {
-            try {
-                await docRef.set({ banks, transactions, recurringTransactions }, { merge: true });
-            } catch(e) { console.error('Firebase save error:', e); }
-        };
-
-        window.loadFromFirebase = async () => {
-            try {
-                const snap = await docRef.get();
-                if (snap.exists) return snap.data();
-            } catch(e) { console.error('Firebase load error:', e); }
-            return null;
-        };
-
-        window.firebaseReady = true;
-        window.dispatchEvent(new Event('firebase-ready'));
-    </script>
     <style>
         :root {
             --primary-color: #3b82f6;
@@ -599,10 +566,9 @@
 
         // --- רכיב האפליקציה המקורי ---
         const FinanceApp = () => {
-            const [banks, setBanks] = useState([{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
-            const [transactions, setTransactions] = useState([]);
-            const [recurringTransactions, setRecurringTransactions] = useState([]);
-            const [loading, setLoading] = useState(true);
+            const [banks, setBanks] = useState(() => JSON.parse(localStorage.getItem('finance_banks')) || [{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_transactions')) || []);
+            const [recurringTransactions, setRecurringTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_recurring')) || []);
             const [currentDate, setCurrentDate] = useState(new Date());
             const [selectedDate, setSelectedDate] = useState(null);
             const [showAddRecurring, setShowAddRecurring] = useState(false);
@@ -615,68 +581,16 @@
             const [deferredPrompt, setDeferredPrompt] = useState(null);
             const [showPending, setShowPending] = useState(true);
 
-            // טעינה ראשונית מ-Firebase, fallback ל-localStorage
+            useEffect(() => { localStorage.setItem('finance_banks', JSON.stringify(banks)); }, [banks]);
+            useEffect(() => { localStorage.setItem('finance_transactions', JSON.stringify(transactions)); }, [transactions]);
+            useEffect(() => { localStorage.setItem('finance_recurring', JSON.stringify(recurringTransactions)); }, [recurringTransactions]);
+
             useEffect(() => {
-                const loadFromLocal = () => {
-                    const lb = localStorage.getItem('finance_banks');
-                    const lt = localStorage.getItem('finance_transactions');
-                    const lr = localStorage.getItem('finance_recurring');
-                    if (lb) setBanks(JSON.parse(lb));
-                    if (lt) setTransactions(JSON.parse(lt));
-                    if (lr) setRecurringTransactions(JSON.parse(lr));
-                    setLoading(false);
-                };
-
-                const loadFromFirebaseAndSet = async () => {
-                    try {
-                        const data = await window.loadFromFirebase();
-                        if (data && (data.banks || data.transactions)) {
-                            if (data.banks) setBanks(data.banks);
-                            if (data.transactions) setTransactions(data.transactions);
-                            if (data.recurringTransactions) setRecurringTransactions(data.recurringTransactions);
-                            setLoading(false);
-                        } else {
-                            loadFromLocal();
-                        }
-                    } catch(e) {
-                        loadFromLocal();
-                    }
-                };
-
-                // timeout של 5 שניות — אם Firebase לא ענה, טען מקומי
-                const timeout = setTimeout(() => {
-                    loadFromLocal();
-                }, 5000);
-
-                const load = async () => {
-                    if (window.firebaseReady) {
-                        clearTimeout(timeout);
-                        await loadFromFirebaseAndSet();
-                    } else {
-                        window.addEventListener('firebase-ready', async () => {
-                            clearTimeout(timeout);
-                            await loadFromFirebaseAndSet();
-                        }, { once: true });
-                    }
-                };
-                load();
-
-                return () => clearTimeout(timeout);
+                fetch('https://api.exchangerate-api.com/v4/latest/USD')
+                    .then(res => res.json())
+                    .then(data => { if (data.rates && data.rates.ILS) { setUsdRate(data.rates.ILS.toFixed(2)); setUsdUpdateTime(new Date().toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })); } })
+                    .catch(() => {});
             }, []);
-
-            // שמירה ל-Firebase בכל שינוי (debounced)
-            const saveTimeout = React.useRef(null);
-            useEffect(() => {
-                if (loading) return;
-                if (saveTimeout.current) clearTimeout(saveTimeout.current);
-                saveTimeout.current = setTimeout(() => {
-                    if (window.saveToFirebase) window.saveToFirebase(banks, transactions, recurringTransactions);
-                    // שמור גם ב-localStorage כגיבוי
-                    localStorage.setItem('finance_banks', JSON.stringify(banks));
-                    localStorage.setItem('finance_transactions', JSON.stringify(transactions));
-                    localStorage.setItem('finance_recurring', JSON.stringify(recurringTransactions));
-                }, 800);
-            }, [banks, transactions, recurringTransactions, loading]);
 
             // PWA install prompt
             useEffect(() => {
@@ -697,21 +611,6 @@
             const onTouchMove = (e) => { setTouchEnd(e.targetTouches[0].clientX); };
             const onTouchEnd = () => { if (!touchStart || !touchEnd) return; const distance = touchStart - touchEnd; if (distance > 50) changeMonth(-1); if (distance < -50) changeMonth(1); };
             const changeMonth = (delta) => { const newDate = new Date(currentDate); newDate.setMonth(newDate.getMonth() + delta); setCurrentDate(newDate); };
-
-            // מסך טעינה
-            if (loading) return (
-                <div className="fixed inset-0 bg-blue-600 flex flex-col items-center justify-center text-white gap-4">
-                    <div className="text-6xl animate-bounce">💰</div>
-                    <div className="text-xl font-bold">טוען נתונים...</div>
-                </div>
-            );
-
-            useEffect(() => {
-                fetch('https://api.exchangerate-api.com/v4/latest/USD')
-                    .then(res => res.json())
-                    .then(data => { if (data.rates && data.rates.ILS) { setUsdRate(data.rates.ILS.toFixed(2)); setUsdUpdateTime(new Date().toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })); } })
-                    .catch(() => {});
-            }, []);
 
             const allTransactions = useMemo(() => [...transactions, ...recurringTransactions.flatMap(r => generateRecurringInstances(r))], [transactions, recurringTransactions]);
 
