@@ -586,7 +586,7 @@
         };
 
         // --- רכיב האפליקציה המקורי ---
-        const FinanceApp = () => {
+        const FinanceApp = ({ currentUser, onLogout }) => {
             const [banks, setBanks] = useState(() => JSON.parse(localStorage.getItem('finance_banks')) || [{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
             const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_transactions')) || []);
             const [recurringTransactions, setRecurringTransactions] = useState(() => JSON.parse(localStorage.getItem('finance_recurring')) || []);
@@ -601,6 +601,20 @@
             const [showPwaInstall, setShowPwaInstall] = useState(false);
             const [deferredPrompt, setDeferredPrompt] = useState(null);
             const [showPending, setShowPending] = useState(true);
+            const [undoToast, setUndoToast] = useState(null); // { txs, label, timer }
+
+            const showUndo = (label, txsToRestore) => {
+                if (undoToast?.timer) clearTimeout(undoToast.timer);
+                const timer = setTimeout(() => setUndoToast(null), 5000);
+                setUndoToast({ label, txsToRestore, timer });
+            };
+
+            const handleUndo = () => {
+                if (!undoToast) return;
+                clearTimeout(undoToast.timer);
+                setTransactions(prev => [...prev, ...undoToast.txsToRestore]);
+                setUndoToast(null);
+            };
 
             const _saveRef = React.useRef(null);
             useEffect(() => {
@@ -697,6 +711,14 @@
                         <span className="text-4xl animate-bounce">💰</span>
                         <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">מנהל הכספים שלי</span>
                     </h1>
+                    {currentUser && (
+                        <div className="flex justify-center mb-4">
+                            <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2 shadow-sm text-sm">
+                                <span className="text-gray-500">👤 <span className="font-bold text-gray-700">{currentUser}</span></span>
+                                <button onClick={onLogout} className="text-red-500 hover:text-red-700 font-bold border-r pr-3 mr-1">התנתק</button>
+                            </div>
+                        </div>
+                    )}
 
                     {/* NEW: PWA Install button */}
                     {showPwaInstall && (
@@ -776,66 +798,248 @@
 
                         {usdRate && <div className="text-center pb-6 space-y-4"><div className="inline-flex items-center gap-2 bg-gradient-to-r from-green-50 to-emerald-50 px-5 py-2.5 rounded-xl border border-green-200 shadow-sm"><span>💵</span><span className="text-sm font-medium text-gray-600">שער:</span><span className="font-bold text-green-700">$1 = ₪{usdRate}</span></div><br/><CurrencyConverter usdRate={usdRate} /></div>}
                     </div>
-                    {selectedDate && <TransactionModal date={selectedDate} banks={banks} allTransactions={allTransactions} onClose={() => setSelectedDate(null)} onAddTransaction={t => setTransactions([...transactions, t])} onUpdateTransaction={updatedTx => setTransactions(transactions.map(t => t.id === updatedTx.id ? updatedTx : t))} onDeleteTransaction={(id) => { const transaction = transactions.find(t => t.id === id); if (transaction?.transferId) { if (confirm('למחוק העברה?')) setTransactions(transactions.filter(t => t.transferId !== transaction.transferId)); } else setTransactions(transactions.filter(tx => tx.id !== id)); }} onAddTransfer={(fromBankId, toBankId, amount, description) => { const transferId = `transfer-${Date.now()}`; const common = { date: selectedDate, isRecurring: false, transferId }; setTransactions([...transactions, { ...common, id: `${transferId}-out`, bankId: fromBankId, amount: -Math.abs(amount), description: description || '🔄 העברה', transferTo: toBankId }, { ...common, id: `${transferId}-in`, bankId: toBankId, amount: Math.abs(amount), description: description || '🔄 העברה', transferFrom: fromBankId }]); }} />}
+                    {selectedDate && <TransactionModal date={selectedDate} banks={banks} allTransactions={allTransactions} onClose={() => setSelectedDate(null)} onAddTransaction={t => setTransactions([...transactions, t])} onUpdateTransaction={updatedTx => setTransactions(transactions.map(t => t.id === updatedTx.id ? updatedTx : t))} onDeleteTransaction={(id) => { const transaction = transactions.find(t => t.id === id); if (transaction?.transferId) { if (confirm('למחוק העברה?')) { const transferTxs = transactions.filter(t => t.transferId === transaction.transferId); showUndo('העברה נמחקה', transferTxs); setTransactions(transactions.filter(t => t.transferId !== transaction.transferId)); } } else { showUndo('תנועה נמחקה', [transaction]); setTransactions(transactions.filter(tx => tx.id !== id)); } }} onAddTransfer={(fromBankId, toBankId, amount, description) => { const transferId = `transfer-${Date.now()}`; const common = { date: selectedDate, isRecurring: false, transferId }; setTransactions([...transactions, { ...common, id: `${transferId}-out`, bankId: fromBankId, amount: -Math.abs(amount), description: description || '🔄 העברה', transferTo: toBankId }, { ...common, id: `${transferId}-in`, bankId: toBankId, amount: Math.abs(amount), description: description || '🔄 העברה', transferFrom: fromBankId }]); }} />}
+
+                    {/* UNDO TOAST */}
+                    {undoToast && (
+                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-gray-800 text-white px-5 py-3 rounded-2xl shadow-2xl animate-fadeIn">
+                            <span className="text-sm font-medium">{undoToast.label}</span>
+                            <button onClick={handleUndo} className="bg-white text-gray-800 px-3 py-1 rounded-lg text-sm font-black hover:bg-gray-100">בטל</button>
+                        </div>
+                    )}
                 </div>
             );
         };
 
-        // FIX: PasswordProtector uses SHA-256 hashing for comparison
-        const PasswordProtector = () => {
-            const [isAuthenticated, setIsAuthenticated] = useState(false);
-            const [inputPass, setInputPass] = useState('');
-            const [error, setError] = useState(false);
-            const [checking, setChecking] = useState(false);
-            
-            const savedPass = localStorage.getItem('finance_app_password');
+        // --- פאנל מנהל ---
+        const AdminPanel = ({ onClose }) => {
+            const [adminPass, setAdminPass] = useState('');
+            const [authed, setAuthed] = useState(false);
+            const [users, setUsers] = useState([]);
+            const [error, setError] = useState('');
+            const [resetUser, setResetUser] = useState(null);
+            const [newPass, setNewPass] = useState('');
+            const ADMIN_HASH_KEY = 'finance_admin_password';
 
-            useEffect(() => {
-                if (!savedPass) setIsAuthenticated(true);
-            }, [savedPass]);
+            const handleAdminLogin = async (e) => {
+                e.preventDefault();
+                const savedHash = localStorage.getItem(ADMIN_HASH_KEY);
+                if (!savedHash) {
+                    // הגדרת סיסמת מנהל בפעם הראשונה
+                    if (adminPass.length < 4) { setError('סיסמה חייבת להיות לפחות 4 תווים'); return; }
+                    const hashed = await hashPassword(adminPass);
+                    localStorage.setItem(ADMIN_HASH_KEY, hashed);
+                    setAuthed(true); loadUsers();
+                } else {
+                    const hashed = await hashPassword(adminPass);
+                    if (hashed === savedHash) { setAuthed(true); loadUsers(); }
+                    else setError('סיסמת מנהל שגויה');
+                }
+            };
+
+            const loadUsers = async () => {
+                if (!window._fbReady) return;
+                const snap = await firebase.firestore().collection('users').get();
+                setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            };
+
+            const deleteUser = async (userId) => {
+                if (!confirm(`למחוק את המשתמש "${userId}"?`)) return;
+                await firebase.firestore().collection('users').doc(userId).delete();
+                await firebase.firestore().collection('finance').doc(userId).delete();
+                loadUsers();
+            };
+
+            const resetPassword = async (userId) => {
+                if (!newPass || newPass.length < 4) { alert('סיסמה חייבת להיות לפחות 4 תווים'); return; }
+                const hashed = await hashPassword(newPass);
+                await firebase.firestore().collection('users').doc(userId).update({ password: hashed });
+                setResetUser(null); setNewPass('');
+                alert('הסיסמה אופסה בהצלחה');
+            };
+
+            return (
+                <>
+                    <div className="backdrop-animate fixed inset-0 bg-black/50 z-40" onClick={onClose}></div>
+                    <div className="modal-animate fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-3xl shadow-2xl w-[95%] max-w-md z-50 overflow-hidden flex flex-col max-h-[85vh]">
+                        <div className="bg-gray-800 p-5 text-white flex justify-between items-center">
+                            <h2 className="text-xl font-bold">🛡️ פאנל מנהל</h2>
+                            <button onClick={onClose} className="bg-white/20 hover:bg-white/40 w-8 h-8 rounded-full flex items-center justify-center">✕</button>
+                        </div>
+                        <div className="p-5 overflow-y-auto">
+                            {!authed ? (
+                                <form onSubmit={handleAdminLogin} className="space-y-3">
+                                    <p className="text-sm text-gray-500 text-center">
+                                        {localStorage.getItem(ADMIN_HASH_KEY) ? 'הזן סיסמת מנהל' : '🔑 הגדר סיסמת מנהל בפעם הראשונה'}
+                                    </p>
+                                    <input type="password" value={adminPass} onChange={e => { setAdminPass(e.target.value); setError(''); }} placeholder="סיסמת מנהל" className="w-full p-3 border-2 rounded-xl outline-none focus:border-gray-500" autoFocus />
+                                    {error && <p className="text-red-500 text-sm font-bold text-center">{error}</p>}
+                                    <button type="submit" className="w-full bg-gray-800 text-white py-3 rounded-xl font-bold hover:bg-gray-900">כניסה</button>
+                                </form>
+                            ) : (
+                                <div className="space-y-3">
+                                    <p className="text-sm text-gray-500 font-bold">{users.length} משתמשים רשומים:</p>
+                                    {users.length === 0 && <p className="text-center text-gray-400 py-4">אין משתמשים עדיין</p>}
+                                    {users.map(u => (
+                                        <div key={u.id} className="bg-gray-50 rounded-xl p-3 border flex justify-between items-center">
+                                            <span className="font-bold text-gray-800">👤 {u.id}</span>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setResetUser(u.id)} className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-100">🔑 אפס סיסמה</button>
+                                                <button onClick={() => deleteUser(u.id)} className="text-xs bg-red-50 text-red-600 px-3 py-1.5 rounded-lg font-bold hover:bg-red-100">🗑️ מחק</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {resetUser && (
+                                        <div className="bg-blue-50 rounded-xl p-3 border-2 border-blue-200 space-y-2">
+                                            <p className="text-sm font-bold text-blue-800">איפוס סיסמה ל-{resetUser}:</p>
+                                            <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="סיסמה חדשה" className="w-full p-2 border rounded-lg text-sm outline-none" />
+                                            <div className="flex gap-2">
+                                                <button onClick={() => resetPassword(resetUser)} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-bold">שמור</button>
+                                                <button onClick={() => { setResetUser(null); setNewPass(''); }} className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg text-sm font-bold">ביטול</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </>
+            );
+        };
+
+        // --- מערכת משתמשים ---
+        const AuthScreen = ({ onLogin }) => {
+            const [mode, setMode] = useState('login'); // 'login' | 'register'
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [confirmPassword, setConfirmPassword] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [logoClicks, setLogoClicks] = useState(0);
+            const [showAdmin, setShowAdmin] = useState(false);
+            const logoClickTimeout = React.useRef(null);
+
+            const usersRef = window._fbReady ? firebase.firestore().collection('users') : null;
+
+            // 3 לחיצות על הלוגו → פאנל מנהל
+            const handleLogoClick = () => {
+                const newCount = logoClicks + 1;
+                setLogoClicks(newCount);
+                if (logoClickTimeout.current) clearTimeout(logoClickTimeout.current);
+                if (newCount >= 3) { setShowAdmin(true); setLogoClicks(0); return; }
+                logoClickTimeout.current = setTimeout(() => setLogoClicks(0), 1500);
+            };
 
             const handleLogin = async (e) => {
                 e.preventDefault();
-                setChecking(true);
-                const hashed = await hashPassword(inputPass);
-                if (hashed === savedPass) {
-                    setIsAuthenticated(true);
-                    setError(false);
-                } else {
-                    setError(true);
-                    setInputPass('');
-                }
-                setChecking(false);
+                if (!username.trim() || !password) { setError('יש למלא שם משתמש וסיסמה'); return; }
+                setLoading(true); setError('');
+                try {
+                    const snap = await usersRef.doc(username.trim().toLowerCase()).get();
+                    if (!snap.exists) { setError('שם משתמש לא קיים'); setLoading(false); return; }
+                    const hashed = await hashPassword(password);
+                    if (snap.data().password !== hashed) { setError('סיסמה שגויה'); setLoading(false); return; }
+                    localStorage.setItem('finance_current_user', username.trim().toLowerCase());
+                    onLogin(username.trim().toLowerCase());
+                } catch(e) { setError('שגיאה בחיבור, נסה שוב'); }
+                setLoading(false);
             };
 
-            if (isAuthenticated) return <FinanceApp />;
+            const handleRegister = async (e) => {
+                e.preventDefault();
+                if (!username.trim() || !password) { setError('יש למלא שם משתמש וסיסמה'); return; }
+                if (username.trim().length < 3) { setError('שם משתמש חייב להיות לפחות 3 תווים'); return; }
+                if (password.length < 4) { setError('סיסמה חייבת להיות לפחות 4 תווים'); return; }
+                if (password !== confirmPassword) { setError('הסיסמאות אינן תואמות'); return; }
+                setLoading(true); setError('');
+                try {
+                    const userKey = username.trim().toLowerCase();
+                    const snap = await usersRef.doc(userKey).get();
+                    if (snap.exists) { setError('שם משתמש כבר תפוס'); setLoading(false); return; }
+                    const hashed = await hashPassword(password);
+                    await usersRef.doc(userKey).set({ username: userKey, password: hashed, createdAt: new Date().toISOString() });
+                    localStorage.setItem('finance_current_user', userKey);
+                    onLogin(userKey);
+                } catch(e) { setError('שגיאה ביצירת חשבון, נסה שוב'); }
+                setLoading(false);
+            };
 
             return (
-                <div className="fixed inset-0 bg-blue-600 flex items-center justify-center p-4">
-                    <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm text-center">
-                        <div className="text-6xl mb-4">🔐</div>
-                        <h2 className="text-2xl font-bold text-gray-800 mb-6">מנהל הכספים נעול</h2>
-                        <form onSubmit={handleLogin} className="space-y-4">
-                            <input 
-                                type="password" 
-                                value={inputPass} 
-                                onChange={e => setInputPass(e.target.value)}
-                                placeholder="הזן סיסמה"
-                                className={`w-full p-4 border-2 rounded-2xl text-center text-xl outline-none transition-all ${error ? 'border-red-500 bg-red-50' : 'border-gray-200 focus:border-blue-500'}`}
+                <div className="fixed inset-0 bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center p-4">
+                    {showAdmin && <AdminPanel onClose={() => setShowAdmin(false)} />}
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm">
+                        <div className="text-center mb-6">
+                            <div className="text-5xl mb-2 cursor-pointer select-none inline-block" onClick={handleLogoClick}>💰</div>
+                            <h2 className="text-2xl font-black text-gray-800">מנהל הכספים</h2>
+                            <p className="text-gray-400 text-sm mt-1">{mode === 'login' ? 'כניסה לחשבון' : 'יצירת חשבון חדש'}</p>
+                        </div>
+                        <form onSubmit={mode === 'login' ? handleLogin : handleRegister} className="space-y-3">
+                            <input
+                                type="text"
+                                value={username}
+                                onChange={e => { setUsername(e.target.value); setError(''); }}
+                                placeholder="👤 שם משתמש"
+                                className="w-full p-3 border-2 rounded-xl outline-none focus:border-blue-500 text-right"
                                 autoFocus
                             />
-                            {error && <p className="text-red-500 text-sm font-bold">סיסמה שגויה, נסה שוב</p>}
-                            <button type="submit" disabled={checking} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-blue-700 transition-colors shadow-lg disabled:opacity-70">
-                                {checking ? '⏳ בודק...' : 'כניסה'}
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={e => { setPassword(e.target.value); setError(''); }}
+                                placeholder="🔑 סיסמה"
+                                className="w-full p-3 border-2 rounded-xl outline-none focus:border-blue-500 text-right"
+                            />
+                            {mode === 'register' && (
+                                <input
+                                    type="password"
+                                    value={confirmPassword}
+                                    onChange={e => { setConfirmPassword(e.target.value); setError(''); }}
+                                    placeholder="🔑 אמת סיסמה"
+                                    className="w-full p-3 border-2 rounded-xl outline-none focus:border-blue-500 text-right"
+                                />
+                            )}
+                            {error && <p className="text-red-500 text-sm font-bold text-center">{error}</p>}
+                            <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-xl font-black text-lg hover:bg-blue-700 transition-colors shadow-lg disabled:opacity-70">
+                                {loading ? '⏳ רגע...' : mode === 'login' ? 'כניסה' : 'הרשמה'}
                             </button>
                         </form>
+                        <button onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }} className="w-full mt-4 text-sm text-blue-600 font-bold hover:underline text-center">
+                            {mode === 'login' ? 'אין לך חשבון? הירשם כאן' : 'יש לך חשבון? התחבר'}
+                        </button>
                     </div>
                 </div>
             );
         };
 
+        const AppRoot = () => {
+            const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('finance_current_user') || null);
+
+            const handleLogin = (username) => {
+                // עדכן את נתיב Firebase לפי המשתמש
+                if (window._fbReady) {
+                    window._fbDocRef = firebase.firestore().collection('finance').doc(username);
+                }
+                setCurrentUser(username);
+            };
+
+            const handleLogout = () => {
+                localStorage.removeItem('finance_current_user');
+                setCurrentUser(null);
+            };
+
+            // אם כבר מחובר — עדכן את נתיב Firebase
+            useEffect(() => {
+                if (currentUser && window._fbReady) {
+                    window._fbDocRef = firebase.firestore().collection('finance').doc(currentUser);
+                }
+            }, [currentUser]);
+
+            if (!currentUser) return <AuthScreen onLogin={handleLogin} />;
+            return <FinanceApp currentUser={currentUser} onLogout={handleLogout} />;
+        };
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<PasswordProtector />);
+        root.render(<AppRoot />);
     </script>
 
     <script>
