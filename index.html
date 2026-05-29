@@ -728,9 +728,20 @@
         // --- רכיב האפליקציה המקורי ---
         const FinanceApp = ({ currentUser, onLogout }) => {
             const prefix = `finance_${currentUser}_`;
-            const [banks, setBanks] = useState(() => JSON.parse(localStorage.getItem(prefix + 'banks')) || [{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }]);
-            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem(prefix + 'transactions')) || []);
-            const [recurringTransactions, setRecurringTransactions] = useState(() => JSON.parse(localStorage.getItem(prefix + 'recurring')) || []);
+            const defaultBanks = [{ id: '1', name: 'חשבון עו"ש', color: '#3b82f6', initialBalance: 0 }];
+            // טעינה מ-localStorage רק אם הנתונים שייכים למשתמש הנוכחי
+            const [banks, setBanks] = useState(() => {
+                const saved = localStorage.getItem(prefix + 'banks');
+                return saved ? JSON.parse(saved) : defaultBanks;
+            });
+            const [transactions, setTransactions] = useState(() => {
+                const saved = localStorage.getItem(prefix + 'transactions');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [recurringTransactions, setRecurringTransactions] = useState(() => {
+                const saved = localStorage.getItem(prefix + 'recurring');
+                return saved ? JSON.parse(saved) : [];
+            });
             const [currentDate, setCurrentDate] = useState(new Date());
             const [selectedDate, setSelectedDate] = useState(null);
             const [showAddRecurring, setShowAddRecurring] = useState(false);
@@ -778,16 +789,22 @@
             // טעינה מ-Firebase בעת עליית האפליקציה
             useEffect(() => {
                 if (!window._fbReady || !window._fbDocRef) return;
+                // וודא שה-ref מצביע על המשתמש הנוכחי
+                window._fbDocRef = firebase.firestore().collection('finance').doc(currentUser);
                 window._fbDocRef.get().then(snap => {
                     if (snap.exists) {
                         const data = snap.data();
                         if (data.banks?.length) setBanks(data.banks);
                         if (data.transactions?.length) setTransactions(data.transactions);
                         if (data.recurringTransactions?.length) setRecurringTransactions(data.recurringTransactions);
+                    } else {
+                        // משתמש חדש — אפס ל-default
+                        setBanks(defaultBanks);
+                        setTransactions([]);
+                        setRecurringTransactions([]);
                     }
-                    // אם Firebase ריק — נשאר עם localStorage (או ריק למשתמש חדש)
                 }).catch(e => console.error('Firebase load error:', e));
-            }, []);
+            }, [currentUser]);
 
             useEffect(() => {
                 fetch('https://api.exchangerate-api.com/v4/latest/USD')
