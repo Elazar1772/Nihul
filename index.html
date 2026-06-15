@@ -13,10 +13,6 @@
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>💰</text></svg>">
     <link rel="manifest" href="#" id="manifest-placeholder">
     
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
     <script>
@@ -30,14 +26,17 @@
                 appId: "1:986568232666:web:e2cab159d6c1039e7e9fe3"
             });
             const _db = firebase.firestore();
-            const _docRef = _db.collection('finance').doc('main-user');
-            window._fbDocRef = _docRef;
+            window._fbDocRef = _db.collection('finance').doc('main-user');
             window._fbReady = true;
         } catch(e) {
             console.error('Firebase init error:', e);
             window._fbReady = false;
         }
     </script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
         :root {
             --primary-color: #3b82f6;
@@ -191,9 +190,13 @@
                     <span className="text-2xl">🏦</span>
                     <input type="text" value={bank.name} onChange={(e) => onUpdate(bank.id, 'name', e.target.value)} className="flex-1 font-semibold text-gray-800 outline-none bg-transparent" />
                 </div>
-                <div className="mb-4">
+                <div className="mb-3">
                     <label className="text-xs text-gray-500 mb-1 block">💰 יתרה התחלתית</label>
                     <input type="number" value={bank.initialBalance} onChange={(e) => onUpdate(bank.id, 'initialBalance', Number(e.target.value))} className="w-full bg-gray-50 rounded-lg px-3 py-2 border border-gray-200 font-mono" />
+                </div>
+                <div className="mb-4">
+                    <label className="text-xs text-gray-500 mb-1 block">🔴 מסגרת אשראי (0 = אין מסגרת)</label>
+                    <input type="number" value={bank.creditLimit || 0} onChange={(e) => onUpdate(bank.id, 'creditLimit', Number(e.target.value))} className="w-full bg-gray-50 rounded-lg px-3 py-2 border border-gray-200 font-mono" min="0" />
                 </div>
                 <div className="flex items-center justify-between pt-3 border-t">
                     <div className="flex items-center gap-2">
@@ -288,10 +291,40 @@
             );
         };
 
-        const DayCell = ({ day, balance, hasNegativeBank, hasTransactions, hasRecurring, hasPending, isToday, isEmpty, onClick }) => {
+        // פונקציית עזר לצבע לפי יתרה ומסגרת
+        // status: 'positive' | 'within_limit' | 'over_limit'
+        const getBalanceStatus = (bankBalances, banks) => {
+            let hasOverLimit = false;
+            let hasWithinLimit = false;
+            for (const bb of bankBalances) {
+                const bank = banks.find(b => b.id === bb.bankId);
+                const limit = bank?.creditLimit || 0;
+                if (bb.balance < 0) {
+                    if (limit > 0 && Math.abs(bb.balance) <= limit) hasWithinLimit = true;
+                    else hasOverLimit = true;
+                }
+            }
+            if (hasOverLimit) return 'over_limit';
+            if (hasWithinLimit) return 'within_limit';
+            return 'positive';
+        };
+
+        const balanceColorClass = (status) => {
+            if (status === 'over_limit') return 'text-red-600';
+            if (status === 'within_limit') return 'text-orange-500';
+            return 'text-green-700';
+        };
+
+        const balanceBgClass = (status) => {
+            if (status === 'over_limit') return 'negative-balance';
+            if (status === 'within_limit') return 'negative-balance';
+            return 'positive-balance';
+        };
+
+        const DayCell = ({ day, balance, balanceStatus, hasTransactions, hasRecurring, hasPending, isToday, isEmpty, onClick }) => {
             if (isEmpty) return <div className="min-h-[100px] bg-gray-50 border border-gray-100"></div>;
             return (
-                <div onClick={onClick} className={`day-cell min-h-[120px] p-3 border border-gray-200 cursor-pointer flex flex-col ${balance >= 0 ? 'positive-balance' : 'negative-balance'} ${isToday ? '!bg-blue-50 border-2 !border-blue-400 shadow-inner' : ''} ${hasPending ? 'has-pending' : ''}`}>
+                <div onClick={onClick} className={`day-cell min-h-[120px] p-3 border border-gray-200 cursor-pointer flex flex-col ${balanceBgClass(balanceStatus)} ${isToday ? '!bg-blue-50 border-2 !border-blue-400 shadow-inner' : ''} ${hasPending ? 'has-pending' : ''}`}>
                     <div className="flex justify-between items-start mb-2">
                         <span className={`day-num text-sm font-semibold ${isToday ? 'text-blue-700' : 'text-gray-700'}`}>
                             {day}
@@ -304,7 +337,7 @@
                         </div>
                     </div>
                     <div className="flex-1 flex items-center justify-center font-bold text-sm">
-                        <span className={`day-amount ${hasNegativeBank ? 'text-red-600' : (balance >= 0 ? 'text-green-700' : 'text-red-600')}`}>{formatCurrencyCompact(balance)}</span>
+                        <span className={`day-amount ${balanceColorClass(balanceStatus)}`}>{formatCurrencyCompact(balance)}</span>
                     </div>
                     {hasPending && <div className="text-[9px] text-orange-400 text-center font-medium">מתוכנן</div>}
                 </div>
@@ -384,7 +417,7 @@
                         </button>
                         <div className="py-1">
                             <div className="text-xs text-gray-400 mb-0.5">📊 מאזן</div>
-                            <div className={`font-bold ${balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrencyCompact(balance)}</div>
+                            <div className={`font-bold ${balance > 0 ? 'text-blue-600' : balance === 0 ? 'text-gray-600' : 'text-red-600'}`}>{formatCurrencyCompact(balance)}</div>
                         </div>
                     </div>
                     {drillType && (
@@ -397,6 +430,36 @@
                         />
                     )}
                 </>
+            );
+        };
+
+        const CreditChargeTxRow = ({ tx, banks }) => {
+            const [expanded, setExpanded] = useState(false);
+            return (
+                <div className={`p-3 rounded-xl border-2 ${tx.isPending ? 'bg-orange-50 border-orange-200' : 'bg-indigo-50 border-indigo-100'}`}>
+                    <div className="flex justify-between items-center cursor-pointer" onClick={() => setExpanded(!expanded)}>
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                                <span className="text-lg">💳</span>
+                                <span className={`font-semibold ${tx.isPending ? 'text-orange-700 italic' : 'text-gray-800'}`}>{tx.description}</span>
+                                {tx.isPending && <span className="text-[9px] bg-orange-200 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">מתוכנן</span>}
+                                <span className="text-[9px] text-indigo-400">{expanded ? '▲' : '▼'} {tx.cardTxs?.length || 0} פריטים</span>
+                            </div>
+                            <div className="text-[10px] text-gray-400 mr-7">{banks.find(b => b.id === tx.bankId)?.name}</div>
+                        </div>
+                        <span className={`font-bold font-mono ${tx.isPending ? 'text-orange-500' : tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(tx.amount)}</span>
+                    </div>
+                    {expanded && tx.cardTxs?.length > 0 && (
+                        <div className="mt-2 mr-7 space-y-1 border-t border-indigo-200 pt-2">
+                            {tx.cardTxs.map((ct, i) => (
+                                <div key={i} className="flex justify-between text-xs text-indigo-700 bg-white rounded-lg px-2 py-1.5 border border-indigo-100">
+                                    <span>{ct.description}</span>
+                                    <span className="font-mono font-bold">{formatCurrency(ct.amount)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             );
         };
 
@@ -486,25 +549,29 @@
                                     />
                                     {filteredDayTransactions.length === 0 ? <div className="text-center py-10 text-gray-400 italic">{searchQuery ? 'לא נמצאו תנועות' : 'אין תנועות ביום זה'}</div> : filteredDayTransactions.map(tx => {
                                         const isTransfer = !!tx.transferId;
+                                        const isCreditCharge = !!tx.isCreditCharge;
                                         const linkedBank = isTransfer ? (tx.transferTo ? banks.find(b => b.id === tx.transferTo) : banks.find(b => b.id === tx.transferFrom)) : null;
+                                        if (isCreditCharge) return <CreditChargeTxRow key={tx.id} tx={tx} banks={banks} />;
                                         return (
-                                            <div key={tx.id} className={`flex justify-between items-center p-3 rounded-xl border-2 ${tx.isPending ? 'bg-orange-50 border-orange-200' : isTransfer ? 'bg-purple-50 border-purple-100' : 'bg-gray-50 border-gray-100'}`}>
-                                                <div className="flex-1">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-lg">{tx.isPending ? '🕐' : isTransfer ? '🔄' : (tx.amount >= 0 ? '💰' : '💸')}</span>
-                                                        <span className={`font-semibold ${tx.isPending ? 'text-orange-700 italic' : 'text-gray-800'}`}>{tx.description}</span>
-                                                        {tx.isPending && <span className="text-[9px] bg-orange-200 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">מתוכנן</span>}
+                                            <div key={tx.id} className={`p-3 rounded-xl border-2 ${tx.isPending ? 'bg-orange-50 border-orange-200' : isTransfer ? 'bg-purple-50 border-purple-100' : 'bg-gray-50 border-gray-100'}`}>
+                                                <div className="flex justify-between items-center">
+                                                    <div className="flex-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-lg">{tx.isPending ? '🕐' : isTransfer ? '🔄' : (tx.amount >= 0 ? '💰' : '💸')}</span>
+                                                            <span className={`font-semibold ${tx.isPending ? 'text-orange-700 italic' : 'text-gray-800'}`}>{tx.description}</span>
+                                                            {tx.isPending && <span className="text-[9px] bg-orange-200 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">מתוכנן</span>}
+                                                        </div>
+                                                        {isTransfer && linkedBank && <div className="text-xs text-purple-600 font-medium mr-7">{tx.transferTo ? `⬅️ נשלח אל ${linkedBank.name}` : `➡️ התקבל מ-${linkedBank.name}`}</div>}
+                                                        <div className="text-[10px] text-gray-400 mr-7">{banks.find(b => b.id === tx.bankId)?.name}</div>
                                                     </div>
-                                                    {isTransfer && linkedBank && <div className="text-xs text-purple-600 font-medium mr-7">{tx.transferTo ? `⬅️ נשלח אל ${linkedBank.name}` : `➡️ התקבל מ-${linkedBank.name}`}</div>}
-                                                    <div className="text-[10px] text-gray-400 mr-7">{banks.find(b => b.id === tx.bankId)?.name}</div>
-                                                </div>
-                                                <div className="flex gap-1 items-center">
-                                                    <span className={`font-bold ml-2 ${tx.isPending ? 'text-orange-500' : tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(tx.amount)}</span>
-                                                    {!tx.isRecurring && <div className="flex bg-white rounded-lg shadow-sm border overflow-hidden">
-                                                        {tx.isPending && <button onClick={() => onUpdateTransaction({...tx, isPending: false})} className="p-2 hover:bg-green-50 text-green-600 text-xs font-bold border-r" title="סמן כבוצע">✓</button>}
-                                                        {!isTransfer && <button onClick={() => startEdit(tx)} className="p-2 hover:bg-blue-50 text-blue-500">✏️</button>}
-                                                        <button onClick={() => onDeleteTransaction(tx.id)} className="p-2 hover:bg-red-50 text-red-400 border-r">🗑️</button>
-                                                    </div>}
+                                                    <div className="flex gap-1 items-center">
+                                                        <span className={`font-bold ml-2 ${tx.isPending ? 'text-orange-500' : tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(tx.amount)}</span>
+                                                        {!tx.isRecurring && <div className="flex bg-white rounded-lg shadow-sm border overflow-hidden">
+                                                            {tx.isPending && <button onClick={() => onUpdateTransaction({...tx, isPending: false})} className="p-2 hover:bg-green-50 text-green-600 text-xs font-bold border-r" title="סמן כבוצע">✓</button>}
+                                                            {!isTransfer && <button onClick={() => startEdit(tx)} className="p-2 hover:bg-blue-50 text-blue-500">✏️</button>}
+                                                            <button onClick={() => onDeleteTransaction(tx.id)} className="p-2 hover:bg-red-50 text-red-400 border-r">🗑️</button>
+                                                        </div>}
+                                                    </div>
                                                 </div>
                                             </div>
                                         );
@@ -513,10 +580,28 @@
                             )}
                             {activeTab === 'bal' && (
                                 <div className="space-y-3 bg-gray-50 p-4 rounded-2xl border-2 border-gray-100">
-                                    {bankBalances.map(b => (
-                                        <div key={b.id} className="flex justify-between items-center p-3 bg-white rounded-xl shadow-sm border"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{backgroundColor: b.color}}></div><span className="font-bold text-gray-700">{b.name}</span></div><span className={`font-mono font-bold ${b.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(b.balance)}</span></div>
-                                    ))}
-                                    <div className="pt-3 border-t-2 flex justify-between items-center px-3"><span className="font-black text-gray-900">סה"כ יתרה:</span><span className={`font-mono font-black text-lg ${bankBalances.reduce((s,b)=>s+b.balance,0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(bankBalances.reduce((s,b)=>s+b.balance,0))}</span></div>
+                                    {bankBalances.map(b => {
+                                        const bank = banks.find(bk => bk.id === b.id);
+                                        const limit = bank?.creditLimit || 0;
+                                        let color = 'text-green-600';
+                                        if (b.balance < 0) {
+                                            color = (limit > 0 && Math.abs(b.balance) <= limit) ? 'text-orange-500' : 'text-red-600';
+                                        }
+                                        return (
+                                            <div key={b.id} className="flex justify-between items-center p-3 bg-white rounded-xl shadow-sm border">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-3 h-3 rounded-full" style={{backgroundColor: b.color}}></div>
+                                                    <span className="font-bold text-gray-700">{b.name}</span>
+                                                    {limit > 0 && <span className="text-[10px] text-gray-400">מסגרת: {formatCurrency(limit)}</span>}
+                                                </div>
+                                                <span className={`font-mono font-bold ${color}`}>{formatCurrency(b.balance)}</span>
+                                            </div>
+                                        );
+                                    })}
+                                    <div className="pt-3 border-t-2 flex justify-between items-center px-3">
+                                        <span className="font-black text-gray-900">סה"כ יתרה:</span>
+                                        <span className={`font-mono font-black text-lg ${balanceColorClass(getBalanceStatus(bankBalances.map(b => ({bankId: b.id, balance: b.balance})), banks))}`}>{formatCurrency(bankBalances.reduce((s,b)=>s+b.balance,0))}</span>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -676,6 +761,318 @@
             );
         };
 
+        // --- כרטיסי אשראי ---
+        const CreditCardDetail = ({ card, creditTransactions, setCreditTransactions, recurringCredit, setRecurringCredit, banks, viewMonth, onClose }) => {
+            const [activeTab, setActiveTab] = useState('charges');
+            const [showAddCharge, setShowAddCharge] = useState(false);
+            const [showAddRecurring, setShowAddRecurring] = useState(false);
+            const [desc, setDesc] = useState('');
+            const [amount, setAmount] = useState('');
+            const [chargeDate, setChargeDate] = useState(getDateKey(new Date()));
+            const [type, setType] = useState('expense');
+
+            const monthKey = `${viewMonth.getFullYear()}-${String(viewMonth.getMonth()+1).padStart(2,'0')}`;
+            const cardTxs = creditTransactions.filter(t => t.cardId === card.id && t.date.startsWith(monthKey));
+            const cardRecurringTxs = recurringCredit
+                .filter(r => r.cardId === card.id)
+                .flatMap(r => generateRecurringInstances({ ...r, bankId: card.bankId }))
+                .filter(t => t.date.startsWith(monthKey));
+            const allCardTxs = [...cardTxs, ...cardRecurringTxs].sort((a,b) => a.date.localeCompare(b.date));
+            const total = allCardTxs.reduce((s,t) => s + t.amount, 0);
+
+            const addCharge = () => {
+                if (!desc.trim() || !amount) return;
+                const finalAmount = type === 'expense' ? -Math.abs(Number(amount)) : Math.abs(Number(amount));
+                setCreditTransactions(prev => [...prev, { id: Date.now().toString(), cardId: card.id, date: chargeDate, description: desc.trim(), amount: finalAmount }]);
+                setDesc(''); setAmount(''); setShowAddCharge(false);
+            };
+
+            return (
+                <>
+                    <div className="backdrop-animate fixed inset-0 bg-black/40 backdrop-blur-sm z-40" onClick={onClose}></div>
+                    <div className="modal-animate fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-3xl shadow-2xl w-[95%] max-w-lg z-50 overflow-hidden flex flex-col max-h-[90vh]">
+                        <div className="bg-indigo-600 p-5 text-white flex justify-between items-center">
+                            <div>
+                                <h2 className="text-xl font-bold">💳 {card.name}</h2>
+                                <p className="text-xs text-indigo-200">{viewMonth.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' })} · חיוב ב-{card.chargeDay}</p>
+                            </div>
+                            <button onClick={onClose} className="bg-white/20 hover:bg-white/40 w-8 h-8 rounded-full flex items-center justify-center">✕</button>
+                        </div>
+                        <div className="flex border-b font-bold text-center">
+                            {[{id:'charges',label:'📝 חיובים'},{id:'recurring',label:'🔄 קבועים'}].map(tab => (
+                                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 py-3 text-sm ${activeTab===tab.id ? 'border-b-4 border-indigo-600 text-indigo-600 bg-indigo-50' : 'text-gray-500'}`}>{tab.label}</button>
+                            ))}
+                        </div>
+                        <div className="p-4 overflow-y-auto flex-1">
+                            {activeTab === 'charges' && (
+                                <div className="space-y-2">
+                                    {allCardTxs.length === 0 && !showAddCharge && <div className="text-center py-8 text-gray-400">אין חיובים החודש</div>}
+                                    {allCardTxs.map(tx => (
+                                        <div key={tx.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border">
+                                            <div>
+                                                <div className="font-semibold text-gray-800">{tx.description}</div>
+                                                <div className="text-xs text-gray-400">{formatDate(tx.date)}{tx.isRecurring ? ' · קבוע' : ''}</div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`font-bold font-mono ${tx.amount >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatCurrency(tx.amount)}</span>
+                                                {!tx.isRecurring && <button onClick={() => setCreditTransactions(prev => prev.filter(t => t.id !== tx.id))} className="text-red-400 hover:text-red-600 text-xs">🗑️</button>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {showAddCharge && (
+                                        <div className="bg-indigo-50 rounded-xl p-3 border-2 border-indigo-200 space-y-2">
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setType('expense')} className={`flex-1 py-2 rounded-lg text-sm font-bold ${type==='expense' ? 'bg-red-500 text-white' : 'bg-white border'}`}>💸 הוצאה</button>
+                                                <button onClick={() => setType('income')} className={`flex-1 py-2 rounded-lg text-sm font-bold ${type==='income' ? 'bg-green-500 text-white' : 'bg-white border'}`}>💰 זיכוי</button>
+                                            </div>
+                                            <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="תיאור" className="w-full p-2 border rounded-lg text-sm outline-none" />
+                                            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="סכום" className="w-full p-2 border rounded-lg text-sm font-mono outline-none" />
+                                            <input type="date" value={chargeDate} onChange={e => setChargeDate(e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                                            <div className="flex gap-2">
+                                                <button onClick={addCharge} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold">✅ הוסף</button>
+                                                <button onClick={() => setShowAddCharge(false)} className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg text-sm font-bold">ביטול</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {!showAddCharge && <button onClick={() => setShowAddCharge(true)} className="w-full bg-indigo-50 text-indigo-600 py-3 rounded-xl font-bold border-2 border-dashed border-indigo-200 hover:bg-indigo-100">➕ הוסף חיוב</button>}
+                                </div>
+                            )}
+                            {activeTab === 'recurring' && (
+                                <div className="space-y-2">
+                                    {recurringCredit.filter(r => r.cardId === card.id).length === 0 && !showAddRecurring && <div className="text-center py-8 text-gray-400">אין חיובים קבועים</div>}
+                                    {recurringCredit.filter(r => r.cardId === card.id).map(r => (
+                                        <div key={r.id} className="flex justify-between items-center p-3 bg-purple-50 rounded-xl border border-purple-100">
+                                            <div>
+                                                <div className="font-semibold text-gray-800">{r.description}</div>
+                                                <div className="text-xs text-gray-400">יום {r.dayOfMonth} · מ-{formatDate(r.startDate)}{r.endDate ? ` עד ${formatDate(r.endDate)}` : ''}</div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`font-bold font-mono ${r.amount >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatCurrency(r.amount)}</span>
+                                                <button onClick={() => setRecurringCredit(prev => prev.filter(x => x.id !== r.id))} className="text-red-400 hover:text-red-600 text-xs">🗑️</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {showAddRecurring && (
+                                        <RecurringCreditForm cardId={card.id} onSave={(data) => { setRecurringCredit(prev => [...prev, { ...data, id: Date.now().toString() }]); setShowAddRecurring(false); }} onCancel={() => setShowAddRecurring(false)} />
+                                    )}
+                                    {!showAddRecurring && <button onClick={() => setShowAddRecurring(true)} className="w-full bg-purple-50 text-purple-600 py-3 rounded-xl font-bold border-2 border-dashed border-purple-200 hover:bg-purple-100">➕ הוסף קבוע</button>}
+                                </div>
+                            )}
+                        </div>
+                        <div className="px-5 py-3 border-t flex justify-between font-black text-lg bg-gray-50">
+                            <span>סה"כ חודש:</span>
+                            <span className={`font-mono ${total <= 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(total)}</span>
+                        </div>
+                    </div>
+                </>
+            );
+        };
+
+        const RecurringCreditForm = ({ cardId, onSave, onCancel }) => {
+            const [formData, setFormData] = useState({ description: '', amount: '', type: 'expense', dayOfMonth: 1, startDate: getDateKey(new Date()), endDate: '' });
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!formData.description.trim() || !formData.amount) return;
+                const finalAmount = formData.type === 'expense' ? -Math.abs(Number(formData.amount)) : Math.abs(Number(formData.amount));
+                onSave({ cardId, description: formData.description.trim(), amount: finalAmount, type: formData.type, dayOfMonth: Number(formData.dayOfMonth), startDate: formData.startDate, endDate: formData.endDate || null, bankId: 'credit' });
+            };
+            return (
+                <form onSubmit={handleSubmit} className="bg-purple-50 rounded-xl p-3 border-2 border-purple-200 space-y-2">
+                    <div className="flex gap-2">
+                        <button type="button" onClick={() => setFormData({...formData, type:'income'})} className={`flex-1 py-2 rounded-lg text-sm font-bold ${formData.type==='income' ? 'bg-green-600 text-white' : 'bg-white border'}`}>💰 זיכוי</button>
+                        <button type="button" onClick={() => setFormData({...formData, type:'expense'})} className={`flex-1 py-2 rounded-lg text-sm font-bold ${formData.type==='expense' ? 'bg-red-600 text-white' : 'bg-white border'}`}>💸 הוצאה</button>
+                    </div>
+                    <input type="text" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} placeholder="תיאור (למשל: נטפליקס)" className="w-full p-2 border rounded-lg text-sm outline-none" required />
+                    <div className="flex gap-2">
+                        <input type="number" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} placeholder="סכום" className="flex-1 p-2 border rounded-lg text-sm font-mono outline-none" required />
+                        <input type="number" value={formData.dayOfMonth} onChange={e => setFormData({...formData, dayOfMonth: e.target.value})} placeholder="יום" min="1" max="28" className="w-16 p-2 border rounded-lg text-sm text-center" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div><label className="text-xs text-gray-500">מתאריך</label><input type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                        <div><label className="text-xs text-gray-500">עד תאריך</label><input type="date" value={formData.endDate} onChange={e => setFormData({...formData, endDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    </div>
+                    <div className="flex gap-2">
+                        <button type="submit" className="flex-1 bg-purple-600 text-white py-2 rounded-lg text-sm font-bold">✅ שמור</button>
+                        <button type="button" onClick={onCancel} className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg text-sm font-bold">ביטול</button>
+                    </div>
+                </form>
+            );
+        };
+
+        const CreditCardsSection = ({ creditCards, setCreditCards, creditTransactions, setCreditTransactions, recurringCredit, setRecurringCredit, banks, currentDate }) => {
+            const [openCard, setOpenCard] = useState(null);
+            const [showAddCard, setShowAddCard] = useState(false);
+            const [newCardName, setNewCardName] = useState('');
+            const [newCardBank, setNewCardBank] = useState(banks[0]?.id || '');
+            const [newCardDay, setNewCardDay] = useState(10);
+
+            const addCard = () => {
+                if (!newCardName.trim()) return;
+                setCreditCards(prev => [...prev, { id: Date.now().toString(), name: newCardName.trim(), bankId: newCardBank, chargeDay: Number(newCardDay) }]);
+                setNewCardName(''); setShowAddCard(false);
+            };
+
+            const getMonthTotal = (cardId) => {
+                const monthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`;
+                const txs = creditTransactions.filter(t => t.cardId === cardId && t.date.startsWith(monthKey));
+                const recTxs = recurringCredit.filter(r => r.cardId === cardId).flatMap(r => generateRecurringInstances({ ...r, bankId: '' })).filter(t => t.date.startsWith(monthKey));
+                return [...txs, ...recTxs].reduce((s,t) => s + t.amount, 0);
+            };
+
+            return (
+                <div className="max-w-7xl mx-auto px-4 sm:px-8 pb-12">
+                    <div className="border-t-4 border-gray-100 pt-8">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-2xl font-black text-gray-800 flex items-center gap-2">💳 כרטיסי אשראי</h2>
+                            <button onClick={() => setShowAddCard(!showAddCard)} className={`px-5 py-2 rounded-xl font-bold shadow-md transition-all ${showAddCard ? 'bg-gray-500 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>{showAddCard ? '✕ ביטול' : '➕ הוסף כרטיס'}</button>
+                        </div>
+
+                        {showAddCard && (
+                            <div className="bg-indigo-50 rounded-2xl p-4 border-2 border-indigo-200 mb-6 space-y-3">
+                                <h4 className="font-bold text-indigo-800">כרטיס חדש</h4>
+                                <input type="text" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="שם הכרטיס (למשל: ישראכרט)" className="w-full p-3 border-2 rounded-xl outline-none focus:border-indigo-400" />
+                                <div className="flex gap-3">
+                                    <select value={newCardBank} onChange={e => setNewCardBank(e.target.value)} className="flex-1 p-3 border-2 rounded-xl bg-white outline-none">
+                                        {banks.map(b => <option key={b.id} value={b.id}>🏦 {b.name}</option>)}
+                                    </select>
+                                    <div className="flex items-center gap-2 bg-white border-2 rounded-xl px-3">
+                                        <span className="text-sm text-gray-500">יום חיוב:</span>
+                                        <input type="number" value={newCardDay} onChange={e => setNewCardDay(e.target.value)} min="1" max="28" className="w-12 text-center font-bold outline-none" />
+                                    </div>
+                                </div>
+                                <button onClick={addCard} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700">✅ הוסף כרטיס</button>
+                            </div>
+                        )}
+
+                        {creditCards.length === 0 && !showAddCard && (
+                            <div className="bg-indigo-50 border-2 border-dashed border-indigo-200 rounded-3xl p-10 text-center">
+                                <div className="text-5xl mb-4">💳</div>
+                                <p className="text-indigo-800 font-bold text-lg">אין כרטיסי אשראי מוגדרים</p>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {creditCards.map(card => {
+                                const total = getMonthTotal(card.id);
+                                const bankName = banks.find(b => b.id === card.bankId)?.name || '';
+                                return (
+                                    <div key={card.id} onClick={() => setOpenCard(card)} className="bg-white rounded-2xl p-5 shadow-md border-2 border-gray-100 hover:border-indigo-300 cursor-pointer transition-all hover:-translate-y-1">
+                                        <div className="flex justify-between items-start mb-3">
+                                            <div>
+                                                <h3 className="font-black text-gray-800 text-lg">💳 {card.name}</h3>
+                                                <p className="text-xs text-gray-400">{bankName} · חיוב ב-{card.chargeDay}</p>
+                                            </div>
+                                            <button onClick={e => { 
+                                                e.stopPropagation(); 
+                                                if(confirm(`למחוק את ${card.name}?\nחיובים שכבר עברו תאריך החיוב יישארו בהיסטוריה.`)) {
+                                                    const today = getDateKey(new Date());
+                                                    // מחק רק חיובים ידניים עתידיים
+                                                    setCreditTransactions(prev => prev.filter(t => !(t.cardId === card.id && t.date > today)));
+                                                    // מחק תנועות קבועות (כולן, כי הן מחושבות דינמית)
+                                                    setRecurringCredit(prev => prev.filter(r => r.cardId !== card.id));
+                                                    // מחק את הכרטיס
+                                                    setCreditCards(prev => prev.filter(c => c.id !== card.id));
+                                                }
+                                            }} className="text-red-400 hover:text-red-600">🗑️</button>
+                                        </div>
+                                        <div className="bg-indigo-50 rounded-xl p-3 text-center">
+                                            <div className="text-xs text-gray-400 mb-1">{currentDate.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' })}</div>
+                                            <div className={`text-xl font-black ${total < 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(total)}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {openCard && (
+                        <CreditCardDetail
+                            card={openCard}
+                            creditTransactions={creditTransactions}
+                            setCreditTransactions={setCreditTransactions}
+                            recurringCredit={recurringCredit}
+                            setRecurringCredit={setRecurringCredit}
+                            banks={banks}
+                            viewMonth={currentDate}
+                            onClose={() => setOpenCard(null)}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        // --- מחשבון ---
+        const Calculator = ({ onClose }) => {
+            const [display, setDisplay] = useState('0');
+            const [expression, setExpression] = useState('');
+            const [justCalculated, setJustCalculated] = useState(false);
+
+            const handleNumber = (num) => {
+                if (justCalculated) { setDisplay(num); setExpression(''); setJustCalculated(false); return; }
+                setDisplay(prev => prev === '0' ? num : prev + num);
+            };
+
+            const handleOperator = (op) => {
+                setJustCalculated(false);
+                setExpression(display + ' ' + op + ' ');
+                setDisplay('0');
+            };
+
+            const handleDecimal = () => {
+                if (justCalculated) { setDisplay('0.'); setExpression(''); setJustCalculated(false); return; }
+                if (!display.includes('.')) setDisplay(prev => prev + '.');
+            };
+
+            const handleEquals = () => {
+                try {
+                    const fullExpr = expression + display;
+                    const result = Function('"use strict"; return (' + fullExpr.replace(/×/g,'*').replace(/÷/g,'/') + ')')();
+                    const rounded = Math.round(result * 100) / 100;
+                    setDisplay(String(rounded));
+                    setExpression(fullExpr + ' =');
+                    setJustCalculated(true);
+                } catch { setDisplay('שגיאה'); setExpression(''); }
+            };
+
+            const handleClear = () => { setDisplay('0'); setExpression(''); setJustCalculated(false); };
+            const handleBackspace = () => { if (justCalculated) return; setDisplay(prev => prev.length > 1 ? prev.slice(0,-1) : '0'); };
+
+            const btn = (label, onClick, cls='') => (
+                <button onClick={onClick} className={`rounded-2xl py-4 text-lg font-bold transition-all active:scale-95 ${cls}`}>{label}</button>
+            );
+
+            return (
+                <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-white rounded-3xl shadow-2xl border-2 border-gray-100 overflow-hidden w-72">
+                    <div className="bg-gray-800 p-4 text-right">
+                        <div className="text-gray-400 text-xs h-4">{expression}</div>
+                        <div className="text-white text-3xl font-mono font-bold truncate">{display}</div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 p-3">
+                        {btn('C', handleClear, 'bg-red-100 text-red-600 hover:bg-red-200')}
+                        {btn('⌫', handleBackspace, 'bg-gray-100 text-gray-600 hover:bg-gray-200')}
+                        {btn('%', () => setDisplay(String(parseFloat(display)/100)), 'bg-gray-100 text-gray-600 hover:bg-gray-200')}
+                        {btn('÷', () => handleOperator('÷'), 'bg-blue-100 text-blue-600 hover:bg-blue-200')}
+                        {btn('7', () => handleNumber('7'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('8', () => handleNumber('8'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('9', () => handleNumber('9'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('×', () => handleOperator('×'), 'bg-blue-100 text-blue-600 hover:bg-blue-200')}
+                        {btn('4', () => handleNumber('4'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('5', () => handleNumber('5'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('6', () => handleNumber('6'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('−', () => handleOperator('-'), 'bg-blue-100 text-blue-600 hover:bg-blue-200')}
+                        {btn('1', () => handleNumber('1'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('2', () => handleNumber('2'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('3', () => handleNumber('3'), 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('+', () => handleOperator('+'), 'bg-blue-100 text-blue-600 hover:bg-blue-200')}
+                        {btn('0', () => handleNumber('0'), 'bg-gray-50 hover:bg-gray-100 col-span-2')}
+                        {btn('.', handleDecimal, 'bg-gray-50 hover:bg-gray-100')}
+                        {btn('=', handleEquals, 'bg-blue-600 text-white hover:bg-blue-700')}
+                    </div>
+                    <button onClick={onClose} className="w-full py-2 text-xs text-gray-400 hover:text-gray-600 border-t">סגור</button>
+                </div>
+            );
+        };
+
         // --- חיפוש גלובלי ---
         const GlobalSearchModal = ({ transactions, banks, onClose, onSelectDate }) => {
             const [query, setQuery] = useState('');
@@ -742,6 +1139,18 @@
                 const saved = localStorage.getItem(prefix + 'recurring');
                 return saved ? JSON.parse(saved) : [];
             });
+            const [creditCards, setCreditCards] = useState(() => {
+                const saved = localStorage.getItem(prefix + 'creditCards');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [creditTransactions, setCreditTransactions] = useState(() => {
+                const saved = localStorage.getItem(prefix + 'creditTransactions');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [recurringCredit, setRecurringCredit] = useState(() => {
+                const saved = localStorage.getItem(prefix + 'recurringCredit');
+                return saved ? JSON.parse(saved) : [];
+            });
             const [currentDate, setCurrentDate] = useState(new Date());
             const [selectedDate, setSelectedDate] = useState(null);
             const [showAddRecurring, setShowAddRecurring] = useState(false);
@@ -754,6 +1163,7 @@
             const [deferredPrompt, setDeferredPrompt] = useState(null);
             const [showPending, setShowPending] = useState(true);
             const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+            const [showCalculator, setShowCalculator] = useState(false);
             const [undoToast, setUndoToast] = useState(null);
 
             const showUndo = (label, txsToRestore) => {
@@ -773,23 +1183,23 @@
             useEffect(() => {
                 if (_saveRef.current) clearTimeout(_saveRef.current);
                 _saveRef.current = setTimeout(() => {
-                    // שמור ב-localStorage עם מפתח ייחודי למשתמש
                     const prefix = `finance_${currentUser}_`;
                     localStorage.setItem(prefix + 'banks', JSON.stringify(banks));
                     localStorage.setItem(prefix + 'transactions', JSON.stringify(transactions));
                     localStorage.setItem(prefix + 'recurring', JSON.stringify(recurringTransactions));
-                    // שמור ב-Firebase אם זמין
+                    localStorage.setItem(prefix + 'creditCards', JSON.stringify(creditCards));
+                    localStorage.setItem(prefix + 'creditTransactions', JSON.stringify(creditTransactions));
+                    localStorage.setItem(prefix + 'recurringCredit', JSON.stringify(recurringCredit));
                     if (window._fbReady && window._fbDocRef) {
-                        window._fbDocRef.set({ banks, transactions, recurringTransactions }, { merge: true })
+                        window._fbDocRef.set({ banks, transactions, recurringTransactions, creditCards, creditTransactions, recurringCredit }, { merge: true })
                             .catch(e => console.error('Firebase save error:', e));
                     }
                 }, 1000);
-            }, [banks, transactions, recurringTransactions]);
+            }, [banks, transactions, recurringTransactions, creditCards, creditTransactions, recurringCredit]);
 
             // טעינה מ-Firebase בעת עליית האפליקציה
             useEffect(() => {
                 if (!window._fbReady || !window._fbDocRef) return;
-                // וודא שה-ref מצביע על המשתמש הנוכחי
                 window._fbDocRef = firebase.firestore().collection('finance').doc(currentUser);
                 window._fbDocRef.get().then(snap => {
                     if (snap.exists) {
@@ -797,11 +1207,16 @@
                         if (data.banks?.length) setBanks(data.banks);
                         if (data.transactions?.length) setTransactions(data.transactions);
                         if (data.recurringTransactions?.length) setRecurringTransactions(data.recurringTransactions);
+                        if (data.creditCards?.length) setCreditCards(data.creditCards);
+                        if (data.creditTransactions?.length) setCreditTransactions(data.creditTransactions);
+                        if (data.recurringCredit?.length) setRecurringCredit(data.recurringCredit);
                     } else {
-                        // משתמש חדש — אפס ל-default
                         setBanks(defaultBanks);
                         setTransactions([]);
                         setRecurringTransactions([]);
+                        setCreditCards([]);
+                        setCreditTransactions([]);
+                        setRecurringCredit([]);
                     }
                 }).catch(e => console.error('Firebase load error:', e));
             }, [currentUser]);
@@ -833,7 +1248,36 @@
             const onTouchEnd = () => { if (!touchStart || !touchEnd) return; const distance = touchStart - touchEnd; if (distance > 50) changeMonth(-1); if (distance < -50) changeMonth(1); };
             const changeMonth = (delta) => { const newDate = new Date(currentDate); newDate.setMonth(newDate.getMonth() + delta); setCurrentDate(newDate); };
 
-            const allTransactions = useMemo(() => [...transactions, ...recurringTransactions.flatMap(r => generateRecurringInstances(r))], [transactions, recurringTransactions]);
+            const allTransactions = useMemo(() => {
+                // תנועות רגילות + חוזרות
+                const regular = [...transactions, ...recurringTransactions.flatMap(r => generateRecurringInstances(r))];
+                // תנועות אוטומטיות של חיוב אשראי — מסתכמות ביום החיוב
+                const creditCharges = creditCards.flatMap(card => {
+                    // כל החיובים הידניים + הקבועים של הכרטיס
+                    const cardTxs = creditTransactions.filter(t => t.cardId === card.id);
+                    const cardRecurring = recurringCredit
+                        .filter(r => r.cardId === card.id)
+                        .flatMap(r => generateRecurringInstances({ ...r, bankId: card.bankId }));
+                    // קבץ לפי חודש וצור תנועה אחת ביום החיוב
+                    const byMonth = {};
+                    [...cardTxs, ...cardRecurring].forEach(t => {
+                        const [y, m] = t.date.split('-');
+                        const key = `${y}-${m}`;
+                        if (!byMonth[key]) byMonth[key] = [];
+                        byMonth[key].push(t);
+                    });
+                    return Object.entries(byMonth).map(([ym, txs]) => {
+                        const [y, m] = ym.split('-');
+                        const chargeDay = clampDayToMonth(card.chargeDay, parseInt(y), parseInt(m) - 1);
+                        const chargeDate = `${y}-${m}-${String(chargeDay).padStart(2,'0')}`;
+                        const total = txs.reduce((s, t) => s + t.amount, 0);
+                        const today = getDateKey(new Date());
+                        const isPending = chargeDate > today;
+                        return { id: `credit-charge-${card.id}-${ym}`, date: chargeDate, bankId: card.bankId, amount: total, description: `💳 חיוב ${card.name}`, isRecurring: false, isCreditCharge: true, isPending, cardId: card.id, cardTxs: txs };
+                    });
+                });
+                return [...regular, ...creditCharges];
+            }, [transactions, recurringTransactions, creditCards, creditTransactions, recurringCredit]);
 
             // allTransactions filtered by pending toggle — used for calendar display only
             const displayTransactions = useMemo(() =>
@@ -848,11 +1292,21 @@
                 for (let day = 1; day <= daysInMonth; day++) {
                     const dateKey = getDateKey(new Date(year, month, day));
                     const bankBalances = banks.map(bank => ({ bankId: bank.id, balance: bank.initialBalance + displayTransactions.filter(t => t.bankId === bank.id && t.date <= dateKey).reduce((s, t) => s + t.amount, 0) }));
-                    const hasNegativeBank = bankBalances.some(b => b.balance < 0);
                     const totalBalance = bankBalances.reduce((sum, b) => sum + b.balance, 0);
                     const displayBalance = selectedBankFilter === 'all' ? totalBalance : bankBalances.find(b => b.bankId === selectedBankFilter)?.balance || 0;
                     const hasPending = transactions.some(t => t.date === dateKey && t.isPending);
-                    days.push({ day, dateKey, balance: displayBalance, hasNegativeBank: hasNegativeBank && selectedBankFilter === 'all', hasTransactions: transactions.some(t => t.date === dateKey && !t.isPending), hasRecurring: allTransactions.some(t => t.date === dateKey && t.isRecurring), hasPending, isToday: dateKey === getDateKey(new Date()), key: dateKey });
+                    // חישוב סטטוס לפי מסגרת
+                    const status = selectedBankFilter === 'all'
+                        ? getBalanceStatus(bankBalances, banks)
+                        : (() => {
+                            const bank = banks.find(b => b.id === selectedBankFilter);
+                            const bal = bankBalances.find(b => b.bankId === selectedBankFilter)?.balance || 0;
+                            if (bal >= 0) return 'positive';
+                            const limit = bank?.creditLimit || 0;
+                            if (limit > 0 && Math.abs(bal) <= limit) return 'within_limit';
+                            return 'over_limit';
+                        })();
+                    days.push({ day, dateKey, balance: displayBalance, balanceStatus: status, hasTransactions: transactions.some(t => t.date === dateKey && !t.isPending), hasRecurring: allTransactions.some(t => t.date === dateKey && t.isRecurring), hasPending, isToday: dateKey === getDateKey(new Date()), key: dateKey });
                 }
                 return days;
             }, [currentDate, banks, displayTransactions, allTransactions, transactions, selectedBankFilter]);
@@ -919,6 +1373,7 @@
                                 🕐 {showPending ? 'כולל מתוכנן' : 'בפועל בלבד'}
                             </button>
                             <button onClick={() => setShowGlobalSearch(true)} className="bg-white border-2 border-gray-200 rounded-xl px-3 py-2 text-sm font-bold hover:border-blue-400 transition-all" title="חיפוש גלובלי">🔍</button>
+                            <button onClick={() => setShowCalculator(!showCalculator)} className={`bg-white border-2 rounded-xl px-3 py-2 text-sm font-bold transition-all ${showCalculator ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-blue-400'}`} title="מחשבון">🧮</button>
                         </div>
 
                         {/* NEW: Monthly summary strip */}
@@ -958,12 +1413,28 @@
 
                         {/* ייבוא דף חשבון CSV */}
                         <CsvImportSection banks={banks} onImport={(newTxs) => setTransactions(prev => [...prev, ...newTxs])} />
-                        
-                        <PasswordSection />
+                    </div>
 
+                    {/* אזור כרטיסי אשראי */}
+                    <CreditCardsSection
+                        creditCards={creditCards}
+                        setCreditCards={setCreditCards}
+                        creditTransactions={creditTransactions}
+                        setCreditTransactions={setCreditTransactions}
+                        recurringCredit={recurringCredit}
+                        setRecurringCredit={setRecurringCredit}
+                        banks={banks}
+                        currentDate={currentDate}
+                    />
+
+                    <div className="max-w-7xl mx-auto px-4 sm:px-8">
+                        <PasswordSection />
                         {usdRate && <div className="text-center pb-6 space-y-4"><div className="inline-flex items-center gap-2 bg-gradient-to-r from-green-50 to-emerald-50 px-5 py-2.5 rounded-xl border border-green-200 shadow-sm"><span>💵</span><span className="text-sm font-medium text-gray-600">שער:</span><span className="font-bold text-green-700">$1 = ₪{usdRate}</span></div><br/><CurrencyConverter usdRate={usdRate} /></div>}
                     </div>
                     {selectedDate && <TransactionModal date={selectedDate} banks={banks} allTransactions={allTransactions} onClose={() => setSelectedDate(null)} onAddTransaction={t => setTransactions([...transactions, t])} onUpdateTransaction={updatedTx => setTransactions(transactions.map(t => t.id === updatedTx.id ? updatedTx : t))} onDeleteTransaction={(id) => { const transaction = transactions.find(t => t.id === id); if (transaction?.transferId) { if (confirm('למחוק העברה?')) { const transferTxs = transactions.filter(t => t.transferId === transaction.transferId); showUndo('העברה נמחקה', transferTxs); setTransactions(transactions.filter(t => t.transferId !== transaction.transferId)); } } else { showUndo('תנועה נמחקה', [transaction]); setTransactions(transactions.filter(tx => tx.id !== id)); } }} onAddTransfer={(fromBankId, toBankId, amount, description) => { const transferId = `transfer-${Date.now()}`; const common = { date: selectedDate, isRecurring: false, transferId }; setTransactions([...transactions, { ...common, id: `${transferId}-out`, bankId: fromBankId, amount: -Math.abs(amount), description: description || '🔄 העברה', transferTo: toBankId }, { ...common, id: `${transferId}-in`, bankId: toBankId, amount: Math.abs(amount), description: description || '🔄 העברה', transferFrom: fromBankId }]); }} />}
+
+                    {/* CALCULATOR */}
+                    {showCalculator && <Calculator onClose={() => setShowCalculator(false)} />}
 
                     {/* GLOBAL SEARCH MODAL */}
                     {showGlobalSearch && (
